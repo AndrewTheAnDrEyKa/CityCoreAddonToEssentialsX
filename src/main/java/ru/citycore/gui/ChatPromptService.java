@@ -23,9 +23,10 @@ public final class ChatPromptService implements Listener {
     public void begin(Player player, String question, Consumer<String> answer) {
         prompts.put(player.getUniqueId(), answer);
         player.closeInventory();
-        player.sendMessage(Component.text("CityCore · Ввод", NamedTextColor.GOLD));
-        player.sendMessage(Component.text(question, NamedTextColor.YELLOW));
-        player.sendMessage(Component.text("Напишите ответ в чат или «отмена».", NamedTextColor.GRAY));
+        player.sendMessage(Component.empty());
+        player.sendMessage(UiText.plain("╭  CityCore · ввод данных", NamedTextColor.GOLD));
+        player.sendMessage(UiText.plain("│  " + question, NamedTextColor.YELLOW));
+        player.sendMessage(UiText.plain("╰  Ответьте в чат. Для выхода: отмена", NamedTextColor.DARK_GRAY));
     }
 
     @EventHandler public void onChat(AsyncChatEvent event) {
@@ -35,7 +36,7 @@ public final class ChatPromptService implements Listener {
         String value = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (value.equalsIgnoreCase("отмена") || value.equalsIgnoreCase("cancel")) {
-                event.getPlayer().sendMessage(Component.text("Ввод отменён.", NamedTextColor.GRAY)); return;
+                UiText.info(event.getPlayer(), "Ввод отменён."); return;
             }
             answer.accept(value);
         });

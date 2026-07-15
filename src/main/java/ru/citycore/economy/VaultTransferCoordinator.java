@@ -1,20 +1,24 @@
 package ru.citycore.economy;
 
-import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.entity.Player;
 import ru.citycore.CityCorePlugin;
 import ru.citycore.city.CityService;
 import ru.citycore.db.StorageExecutor;
+import ru.citycore.gui.GuiFeedback;
+import ru.citycore.gui.UiText;
 
 public final class VaultTransferCoordinator {
     private final CityCorePlugin plugin; private final StorageExecutor storage; private final EconomyGateway economy;
     private final CityService cities; private final VaultTransferRepository transfers; private final InternalLedger ledger;
+    private final GuiFeedback feedback;
     private final String clearingAccount;
 
     public VaultTransferCoordinator(CityCorePlugin plugin, StorageExecutor storage, EconomyGateway economy,
-                                    CityService cities, VaultTransferRepository transfers, InternalLedger ledger) {
+                                    CityService cities, VaultTransferRepository transfers, InternalLedger ledger,
+                                    GuiFeedback feedback) {
         this.plugin = plugin; this.storage = storage; this.economy = economy; this.cities = cities; this.transfers = transfers; this.ledger = ledger;
+        this.feedback = feedback;
         this.clearingAccount = ledger.ensureAccount("SYSTEM", "VAULT_CLEARING", "ESSENTIALS");
     }
 
@@ -73,6 +77,15 @@ public final class VaultTransferCoordinator {
         }));
     }
 
-    private void message(Player player, String text, NamedTextColor color) { if (player.isOnline()) player.sendMessage(Component.text(text, color)); }
+    private void message(Player player, String text, NamedTextColor color) {
+        if (!player.isOnline()) return;
+        if (color == NamedTextColor.GREEN) {
+            feedback.success(player);
+            UiText.success(player, text);
+        } else if (color == NamedTextColor.RED) {
+            feedback.failure(player);
+            UiText.error(player, text);
+        } else UiText.send(player, text, color);
+    }
     private String rootMessage(Throwable error) { Throwable value = error; while (value.getCause() != null) value = value.getCause(); return value.getMessage() == null ? value.getClass().getSimpleName() : value.getMessage(); }
 }

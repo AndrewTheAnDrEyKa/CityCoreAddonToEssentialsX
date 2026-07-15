@@ -49,11 +49,11 @@ public final class CityCorePlugin extends JavaPlugin {
             CityService cities = new CityService(database);
             BusinessService businesses = new BusinessService(database);
             InternalLedger ledger = new InternalLedger(database);
+            GuiFeedback feedback = new GuiFeedback(this);
             VaultTransferCoordinator vaultTransfers = new VaultTransferCoordinator(this, storage, economy, cities,
-                    new VaultTransferRepository(database), ledger);
+                    new VaultTransferRepository(database), ledger, feedback);
             vaultTransfers.recoverIncomplete();
             ChatPromptService prompts = new ChatPromptService(this);
-            GuiFeedback feedback = new GuiFeedback(this);
             GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback, vaultTransfers);
             getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
