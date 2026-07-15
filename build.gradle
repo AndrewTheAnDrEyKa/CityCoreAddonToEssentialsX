@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'ru.citycore'
-version = '0.1.0-alpha.16.0'
+version = '0.1.0-alpha.17.0'
 
 repositories {
     mavenCentral()
@@ -15,6 +15,7 @@ repositories {
 dependencies {
     compileOnly 'io.papermc.paper:paper-api:1.21.8-R0.1-SNAPSHOT'
     compileOnly 'com.github.MilkBowl:VaultAPI:1.7.1'
+    compileOnly 'net.luckperms:api:5.4'
     implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
     implementation 'com.zaxxer:HikariCP:6.3.0'
     testImplementation platform('org.junit:junit-bom:5.13.4')
