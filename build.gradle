@@ -34,7 +34,20 @@ processResources {
     filesMatching('plugin.yml') { expand(version: project.version) }
 }
 
-test { useJUnitPlatform() }
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'failed', 'skipped'
+        exceptionFormat 'full'
+        showCauses true
+        showExceptions true
+        showStackTraces true
+    }
+    reports {
+        junitXml.required = true
+        html.required = true
+    }
+}
 
 shadowJar {
     archiveClassifier = ''

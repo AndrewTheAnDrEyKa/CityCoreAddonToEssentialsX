@@ -27,6 +27,15 @@ jobs:
           gradle-version: '8.14.3'
       - name: Test and build
         run: gradle --no-daemon clean build
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityCore-test-report
+          path: |
+            build/test-results/test/
+            build/reports/tests/test/
+          if-no-files-found: warn
       - name: Upload plugin JAR
         uses: actions/upload-artifact@v4
         with:
