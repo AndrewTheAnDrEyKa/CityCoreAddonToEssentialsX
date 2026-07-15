@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'ru.citycore'
-version = '0.1.0-alpha.15.2'
+version = '0.1.0-alpha.15.3'
 
 repositories {
     mavenCentral()
@@ -53,7 +53,6 @@ test {
 shadowJar {
     archiveClassifier = ''
     relocate 'com.zaxxer.hikari', 'ru.citycore.lib.hikari'
-    relocate 'org.sqlite', 'ru.citycore.lib.sqlite'
 }
 
 tasks.build.dependsOn tasks.shadowJar

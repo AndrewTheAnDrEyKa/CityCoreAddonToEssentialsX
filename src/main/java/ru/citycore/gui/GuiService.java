@@ -38,8 +38,10 @@ public final class GuiService {
 
     public void open(Player player, Route route) {
         context.put(player.getUniqueId(), route);
-        Inventory inventory = plugin.getServer().createInventory(new CityCoreHolder(route), 54,
+        CityCoreHolder holder = new CityCoreHolder(route);
+        Inventory inventory = plugin.getServer().createInventory(holder, 54,
                 Component.text(title(route), NamedTextColor.DARK_GRAY));
+        holder.bind(inventory);
         render(player, route, inventory);
         player.openInventory(inventory);
     }
