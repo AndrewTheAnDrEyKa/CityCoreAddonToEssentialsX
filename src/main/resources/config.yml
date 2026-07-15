@@ -8,4 +8,6 @@ security:
 gui:
   title: "CityCore"
   rows: 6
-
+  sounds: true
+  sound-volume: 0.55
+  custom-heads: false

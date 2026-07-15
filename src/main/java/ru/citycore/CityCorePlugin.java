@@ -17,6 +17,8 @@ import ru.citycore.economy.VaultTransferRepository;
 import ru.citycore.economy.VaultTransferCoordinator;
 import ru.citycore.gui.GuiListener;
 import ru.citycore.gui.GuiService;
+import ru.citycore.gui.GuiFeedback;
+import ru.citycore.gui.ChatPromptService;
 import ru.citycore.profile.ProfileListener;
 import ru.citycore.profile.ProfileRepository;
 
@@ -50,9 +52,12 @@ public final class CityCorePlugin extends JavaPlugin {
             VaultTransferCoordinator vaultTransfers = new VaultTransferCoordinator(this, storage, economy, cities,
                     new VaultTransferRepository(database), ledger);
             vaultTransfers.recoverIncomplete();
-            GuiService gui = new GuiService(this, economy, storage, cities, businesses);
+            ChatPromptService prompts = new ChatPromptService(this);
+            GuiFeedback feedback = new GuiFeedback(this);
+            GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback, vaultTransfers);
             getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
+            getServer().getPluginManager().registerEvents(prompts, this);
             CityCoreCommand command = new CityCoreCommand(this, gui, storage, cities, businesses, vaultTransfers);
             var registered = getCommand("citycore");
             if (registered == null) throw new IllegalStateException("Команда citycore отсутствует в plugin.yml");
