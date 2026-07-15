@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'ru.citycore'
-version = '0.1.0-alpha.17.1'
+version = '0.1.0-alpha.17.2'
 
 repositories {
     mavenCentral()

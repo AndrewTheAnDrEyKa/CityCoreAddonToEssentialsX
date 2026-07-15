@@ -1,4 +1,4 @@
-# Обновление репозитория исходниками alpha.17.1
+# Обновление репозитория исходниками alpha.17.2
 
 Загрузка через **Add file → Upload files** не подходит для этой операции: GitHub может перезаписать только выбранную часть дерева и оставить старые вложенные файлы. В результате получается гибрид разных версий.
 
@@ -6,7 +6,7 @@
 
 ## 1. Распаковать исходники
 
-Распакуйте архив `CityCore-0.1.0-alpha.17.1-source-hotfix.zip`. Внутри должна находиться папка `CityCore-alpha17`.
+Распакуйте архив `CityCore-0.1.0-alpha.17.2-source-gui.zip`. Внутри должна находиться папка `CityCore-alpha17`.
 
 ## 2. Создать отдельный свежий clone
 
@@ -49,19 +49,22 @@ git status
 Затем выполните проверки:
 
 ```powershell
-Select-String -Path .github\workflows\build.yml -Pattern "alpha.17.1"
+Select-String -Path .github\workflows\build.yml -Pattern "alpha.17.2"
 Select-String -Path src\main\resources\plugin.yml -Pattern "citycoreadmin"
 Select-String -Path src\main\resources\config.yml -Pattern "config-version: 3"
 Test-Path src\main\java\ru\citycore\economy\EmissionService.java
 Test-Path src\main\java\ru\citycore\permission\Capability.java
+Test-Path src\main\java\ru\citycore\gui\GuiLayout.java
+Test-Path src\test\java\ru\citycore\gui\GuiLayoutTest.java
 Test-Path docs\ideas\settlements.md
+Test-Path docs\gui-layout-spec-v0.4.md
 ```
 
 Ожидаемый результат:
 
 - первые три команды находят нужные строки;
-- последние три команды выводят `True`;
-- `git status` показывает замену файлов полным деревом alpha.17.1;
+- последние шесть команд выводят `True`;
+- `git status` показывает замену файлов полным деревом alpha.17.2;
 - `.github/workflows/build.yml` не остаётся удалённым.
 
 Если проверка не совпала, не выполняйте commit. Исходное состояние нового clone можно просто удалить вместе с папкой `CityCoreAlpha17Clean` и начать заново; резервная папка не затрагивается.
@@ -69,15 +72,15 @@ Test-Path docs\ideas\settlements.md
 ## 6. Отправить чистую версию
 
 ```powershell
-git commit -m "Fix optional LuckPerms startup in alpha.17.1"
+git commit -m "Rebuild CityCore GUI layout for alpha.17.2"
 git push origin main
 ```
 
 После push откройте новый GitHub Actions run. В шаге загрузки artifact должны использоваться:
 
 ```text
-CityCore-0.1.0-alpha.17.1
-build/libs/CityCore-0.1.0-alpha.17.1.jar
+CityCore-0.1.0-alpha.17.2
+build/libs/CityCore-0.1.0-alpha.17.2.jar
 ```
 
 Готовый artifact скачивается только после зелёного выполнения workflow.
