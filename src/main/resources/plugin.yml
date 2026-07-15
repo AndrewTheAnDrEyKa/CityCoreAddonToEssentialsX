@@ -1,0 +1,22 @@
+name: CityCore
+version: '${version}'
+main: ru.citycore.CityCorePlugin
+api-version: '1.21'
+authors: [CityCore Team]
+description: City-state economy and governance core
+depend: [Vault, Essentials]
+commands:
+  citycore:
+    aliases: [cc]
+    description: Открыть CityCore
+    usage: /citycore [help|status|reload]
+permissions:
+  citycore.use:
+    default: true
+  citycore.admin:
+    default: op
+  citycore.admin.status:
+    default: op
+  citycore.admin.reload:
+    default: op
+

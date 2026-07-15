@@ -1,0 +1,11 @@
+database:
+  file: citycore.db
+  pool-size: 4
+economy:
+  currency-scale: 2
+security:
+  warn-offline-mode: true
+gui:
+  title: "CityCore"
+  rows: 6
+
