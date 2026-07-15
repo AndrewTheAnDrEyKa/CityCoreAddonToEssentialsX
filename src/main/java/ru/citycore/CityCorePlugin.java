@@ -5,12 +5,16 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import ru.citycore.command.CityCoreCommand;
 import ru.citycore.city.CityService;
+import ru.citycore.business.BusinessService;
 import ru.citycore.config.CityCoreConfig;
 import ru.citycore.db.Database;
 import ru.citycore.db.Migrations;
 import ru.citycore.db.StorageExecutor;
 import ru.citycore.economy.EconomyGateway;
 import ru.citycore.economy.VaultEconomyGateway;
+import ru.citycore.economy.InternalLedger;
+import ru.citycore.economy.VaultTransferRepository;
+import ru.citycore.economy.VaultTransferCoordinator;
 import ru.citycore.gui.GuiListener;
 import ru.citycore.gui.GuiService;
 import ru.citycore.profile.ProfileListener;
@@ -41,10 +45,15 @@ public final class CityCorePlugin extends JavaPlugin {
 
             ProfileRepository profiles = new ProfileRepository(database);
             CityService cities = new CityService(database);
-            GuiService gui = new GuiService(this, economy);
+            BusinessService businesses = new BusinessService(database);
+            InternalLedger ledger = new InternalLedger(database);
+            VaultTransferCoordinator vaultTransfers = new VaultTransferCoordinator(this, storage, economy, cities,
+                    new VaultTransferRepository(database), ledger);
+            vaultTransfers.recoverIncomplete();
+            GuiService gui = new GuiService(this, economy, storage, cities, businesses);
             getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
-            CityCoreCommand command = new CityCoreCommand(this, gui, storage, cities);
+            CityCoreCommand command = new CityCoreCommand(this, gui, storage, cities, businesses, vaultTransfers);
             var registered = getCommand("citycore");
             if (registered == null) throw new IllegalStateException("Команда citycore отсутствует в plugin.yml");
             registered.setExecutor(command); registered.setTabCompleter(command);
@@ -52,7 +61,7 @@ public final class CityCorePlugin extends JavaPlugin {
             if (!getServer().getOnlineMode() && config.warnOfflineMode()) {
                 getLogger().warning("Сервер работает в offline-mode: UUID не подтверждаются Mojang и могут быть подменены.");
             }
-            getLogger().info("CityCore " + getPluginMeta().getVersion() + " включён; schema=1; economy=" + vault.getName());
+            getLogger().info("CityCore " + getPluginMeta().getVersion() + " включён; schema=3; economy=" + vault.getName());
         } catch (Exception exception) {
             getLogger().severe("CityCore не может безопасно запуститься: " + exception.getMessage());
             getSLF4JLogger().error("Startup failure", exception);
@@ -71,7 +80,13 @@ public final class CityCorePlugin extends JavaPlugin {
         return provider.getProvider();
     }
 
-    public void reloadCityCoreConfig() { reloadConfig(); config = CityCoreConfig.from(getConfig()); }
+    public void reloadCityCoreConfig() {
+        reloadConfig(); CityCoreConfig next = CityCoreConfig.from(getConfig());
+        if (config != null && config.currencyScale() != next.currencyScale()) {
+            throw new IllegalStateException("Изменение economy.currency-scale требует полного перезапуска сервера");
+        }
+        config = next;
+    }
     public CityCoreConfig config() { return config; }
     public EconomyGateway economy() { return economy; }
 }
