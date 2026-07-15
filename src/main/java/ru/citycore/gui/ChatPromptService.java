@@ -17,12 +17,17 @@ import java.util.function.Consumer;
 
 public final class ChatPromptService implements Listener {
     private final CityCorePlugin plugin;
+    private final GuiFeedback feedback;
     private final Map<UUID, Consumer<String>> prompts = new ConcurrentHashMap<>();
-    public ChatPromptService(CityCorePlugin plugin) { this.plugin = plugin; }
+    public ChatPromptService(CityCorePlugin plugin, GuiFeedback feedback) {
+        this.plugin = plugin;
+        this.feedback = feedback;
+    }
 
     public void begin(Player player, String question, Consumer<String> answer) {
         prompts.put(player.getUniqueId(), answer);
         player.closeInventory();
+        feedback.prompt(player);
         player.sendMessage(Component.empty());
         player.sendMessage(UiText.plain("╭  CityCore · ввод данных", NamedTextColor.GOLD));
         player.sendMessage(UiText.plain("│  " + question, NamedTextColor.YELLOW));

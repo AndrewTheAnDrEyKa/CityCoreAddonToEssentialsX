@@ -95,15 +95,110 @@ public final class BusinessService {
     public List<BusinessView> list(UUID actor, boolean pendingOnly) {
         return database.transaction(connection -> {
             Authority membership = authority(connection, actor); if (membership == null) return List.of();
-            String sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=?" + (pendingOnly ? " AND b.status='PENDING'" : "") + " ORDER BY b.created_at";
+            boolean official = membership.role() == CityRole.MAYOR || membership.role() == CityRole.OFFICIAL;
+            if (pendingOnly && !official) throw new SecurityException("Очередь регистраций доступна мэру и чиновникам");
+            String filter = pendingOnly ? " AND b.status='PENDING'"
+                    : (official ? "" : " AND (b.status='ACTIVE' OR b.owner_uuid=?)");
+            String sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=?" + filter + " ORDER BY b.created_at";
             List<BusinessView> result = new ArrayList<>();
             try (var query = connection.prepareStatement(sql)) {
-                query.setString(1, membership.cityId()); try (var rs = query.executeQuery()) {
+                query.setString(1, membership.cityId());
+                if (!pendingOnly && !official) query.setString(2, actor.toString());
+                try (var rs = query.executeQuery()) {
                     while (rs.next()) result.add(new BusinessView(rs.getString("id"), rs.getString("city_id"), UUID.fromString(rs.getString("owner_uuid")), rs.getString("slug"), rs.getString("name"), rs.getString("status"), rs.getString("account_id")));
                 }
             }
             return List.copyOf(result);
         });
+    }
+
+    public BusinessDetail detail(UUID actor, String businessId) {
+        return database.transaction(connection -> {
+            Authority authority = authority(connection, actor);
+            if (authority == null) throw new IllegalStateException("Для просмотра требуется гражданство");
+            try (var query = connection.prepareStatement("""
+                    SELECT b.id,b.city_id,b.owner_uuid,b.slug,b.name,b.status,p.last_name,
+                           a.id account_id,a.balance_minor
+                    FROM business b
+                    JOIN player_profile p ON p.uuid=b.owner_uuid
+                    LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id
+                    WHERE b.id=?
+                    """)) {
+                query.setString(1, businessId);
+                try (var rs = query.executeQuery()) {
+                    if (!rs.next()) throw new IllegalArgumentException("Предприятие не найдено");
+                    if (!authority.cityId().equals(rs.getString("city_id"))) {
+                        throw new SecurityException("Предприятие относится к другому городу");
+                    }
+                    UUID ownerId = UUID.fromString(rs.getString("owner_uuid"));
+                    boolean official = authority.role() == CityRole.MAYOR || authority.role() == CityRole.OFFICIAL;
+                    boolean owner = actor.equals(ownerId);
+                    if (!official && !owner && !"ACTIVE".equals(rs.getString("status"))) {
+                        throw new SecurityException("Неактивная регистрация доступна только владельцу и городской власти");
+                    }
+                    Long balance = null;
+                    if ((owner || official) && rs.getString("account_id") != null) balance = rs.getLong("balance_minor");
+                    return new BusinessDetail(rs.getString("id"), rs.getString("city_id"), ownerId,
+                            rs.getString("last_name"), rs.getString("slug"), rs.getString("name"),
+                            rs.getString("status"), rs.getString("account_id"), balance, owner, official,
+                            readLicenses(connection, businessId));
+                }
+            }
+        });
+    }
+
+    public List<LicenseCard> licenseRegistry(UUID actor) {
+        return database.transaction(connection -> {
+            Authority authority = authority(connection, actor);
+            if (authority == null) return List.of();
+            boolean official = authority.role() == CityRole.MAYOR || authority.role() == CityRole.OFFICIAL;
+            String sql = """
+                    SELECT l.id,l.business_id,l.license_type,l.status,l.issued_at,l.expires_at,b.name
+                    FROM license l JOIN business b ON b.id=l.business_id
+                    WHERE b.city_id=?
+                    """ + (official ? "" : " AND b.owner_uuid=?") + " ORDER BY l.expires_at,l.license_type";
+            List<LicenseCard> result = new ArrayList<>();
+            try (var query = connection.prepareStatement(sql)) {
+                query.setString(1, authority.cityId());
+                if (!official) query.setString(2, actor.toString());
+                try (var rs = query.executeQuery()) {
+                    while (rs.next()) result.add(new LicenseCard(rs.getString("id"), rs.getString("business_id"),
+                            rs.getString("name"), rs.getString("license_type"), rs.getString("status"),
+                            Instant.parse(rs.getString("issued_at")),
+                            rs.getString("expires_at") == null ? null : Instant.parse(rs.getString("expires_at"))));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public String accountForOwner(UUID owner, String businessId) {
+        return database.transaction(connection -> {
+            try (var query = connection.prepareStatement("""
+                    SELECT a.id FROM business b
+                    JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id AND a.currency='ESSENTIALS'
+                    WHERE b.id=? AND b.owner_uuid=? AND b.status IN ('ACTIVE','WARNING','DEBT','SUSPENDED')
+                    """)) {
+                query.setString(1, businessId); query.setString(2, owner.toString());
+                try (var rs = query.executeQuery()) {
+                    if (!rs.next()) throw new SecurityException("Пополнять можно только счёт своего действующего предприятия");
+                    return rs.getString(1);
+                }
+            }
+        });
+    }
+
+    private List<LicenseView> readLicenses(java.sql.Connection connection, String businessId) throws Exception {
+        List<LicenseView> result = new ArrayList<>();
+        try (var query = connection.prepareStatement("SELECT id,license_type,status,issued_at,expires_at FROM license WHERE business_id=? ORDER BY license_type")) {
+            query.setString(1, businessId);
+            try (var rs = query.executeQuery()) {
+                while (rs.next()) result.add(new LicenseView(rs.getString("id"), businessId,
+                        rs.getString("license_type"), rs.getString("status"), Instant.parse(rs.getString("issued_at")),
+                        rs.getString("expires_at") == null ? null : Instant.parse(rs.getString("expires_at"))));
+            }
+        }
+        return List.copyOf(result);
     }
 
     private Authority requireOfficial(java.sql.Connection connection, UUID actor) throws Exception {
@@ -129,4 +224,9 @@ public final class BusinessService {
     private record BusinessRow(String cityId, String status) {}
     public record BusinessView(String id, String cityId, UUID ownerId, String slug, String name, String status, String accountId) {}
     public record LicenseView(String id, String businessId, String type, String status, Instant issuedAt, Instant expiresAt) {}
+    public record BusinessDetail(String id, String cityId, UUID ownerId, String ownerName, String slug,
+                                 String name, String status, String accountId, Long balanceMinor,
+                                 boolean owner, boolean official, List<LicenseView> licenses) {}
+    public record LicenseCard(String id, String businessId, String businessName, String type, String status,
+                              Instant issuedAt, Instant expiresAt) {}
 }

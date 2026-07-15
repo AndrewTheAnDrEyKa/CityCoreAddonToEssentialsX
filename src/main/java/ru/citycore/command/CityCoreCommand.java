@@ -93,6 +93,22 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
             String name = String.join(" ", java.util.Arrays.copyOfRange(args, 3, args.length));
             runAsync(player, () -> "Бизнес зарегистрирован: " + businesses.register(player.getUniqueId(), args[2], name).id()); return true;
         }
+        if (args[0].equalsIgnoreCase("business") && args.length == 3 && args[1].equalsIgnoreCase("info") && sender instanceof Player player) {
+            storage.submit(() -> businesses.detail(player.getUniqueId(), args[2])).whenComplete((business, error) -> sync(player, () -> {
+                if (error != null) failure(player, error);
+                else UiText.info(player, business.name() + " · " + statusLabel(business.status())
+                        + " · владелец: " + business.ownerName()
+                        + (business.balanceMinor() == null ? "" : " · счёт: " + MinorUnits.format(business.balanceMinor(), plugin.config().currencyScale())));
+            })); return true;
+        }
+        if (args[0].equalsIgnoreCase("business") && args.length == 4 && args[1].equalsIgnoreCase("deposit") && sender instanceof Player player) {
+            try {
+                vaultTransfers.depositToBusiness(player, args[2], MinorUnits.parse(args[3], plugin.config().currencyScale()));
+            } catch (ArithmeticException | NumberFormatException invalid) {
+                UiText.error(player, "Некорректная сумма. Пример: /cc business deposit <ID> 100.00");
+            }
+            return true;
+        }
         if (args[0].equalsIgnoreCase("business") && args.length == 2 && (args[1].equalsIgnoreCase("list") || args[1].equalsIgnoreCase("pending")) && sender instanceof Player player) {
             boolean pending = args[1].equalsIgnoreCase("pending");
             storage.submit(() -> businesses.list(player.getUniqueId(), pending)).whenComplete((items, error) -> sync(player, () -> {
@@ -130,7 +146,7 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
     @Override public List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, String[] args) {
         if (args.length == 1) return List.of("city", "business", "treasury", "status", "reload");
         if (args.length == 2 && args[0].equalsIgnoreCase("city")) return List.of("create", "apply", "info", "applications", "accept", "reject", "role");
-        if (args.length == 2 && args[0].equalsIgnoreCase("business")) return List.of("register", "list", "pending", "approve", "reject", "license", "unlicense");
+        if (args.length == 2 && args[0].equalsIgnoreCase("business")) return List.of("register", "info", "deposit", "list", "pending", "approve", "reject", "license", "unlicense");
         if (args.length == 2 && args[0].equalsIgnoreCase("treasury")) return List.of("deposit");
         return List.of();
     }

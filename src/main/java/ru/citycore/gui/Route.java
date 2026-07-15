@@ -1,3 +1,19 @@
 package ru.citycore.gui;
 
-public enum Route { HOME, PROFILE, CITY, BUSINESS, ECONOMY, ADMIN }
+public enum Route {
+    HOME,
+    PROFILE,
+    CITY,
+    CITY_DIRECTORY,
+    CITY_APPLICATIONS,
+    CITY_APPLICATION_DETAIL,
+    CITY_MEMBERS,
+    BUSINESS,
+    BUSINESS_DETAIL,
+    BUSINESS_PENDING,
+    LICENSES,
+    ECONOMY,
+    ADMIN,
+    PLANNED,
+    CONFIRM
+}

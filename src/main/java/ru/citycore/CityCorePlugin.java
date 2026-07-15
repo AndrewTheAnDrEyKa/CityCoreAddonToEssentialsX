@@ -3,6 +3,7 @@ package ru.citycore;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.configuration.file.YamlConfiguration;
 import ru.citycore.command.CityCoreCommand;
 import ru.citycore.city.CityService;
 import ru.citycore.business.BusinessService;
@@ -22,6 +23,8 @@ import ru.citycore.gui.ChatPromptService;
 import ru.citycore.profile.ProfileListener;
 import ru.citycore.profile.ProfileRepository;
 
+import java.io.File;
+import java.io.IOException;
 import java.nio.file.Path;
 
 public final class CityCorePlugin extends JavaPlugin {
@@ -32,6 +35,7 @@ public final class CityCorePlugin extends JavaPlugin {
 
     @Override public void onEnable() {
         saveDefaultConfig();
+        migrateConfigIfNeeded();
         reloadCityCoreConfig();
         try {
             Path dataDirectory = getDataFolder().toPath().toAbsolutePath().normalize();
@@ -51,9 +55,9 @@ public final class CityCorePlugin extends JavaPlugin {
             InternalLedger ledger = new InternalLedger(database);
             GuiFeedback feedback = new GuiFeedback(this);
             VaultTransferCoordinator vaultTransfers = new VaultTransferCoordinator(this, storage, economy, cities,
-                    new VaultTransferRepository(database), ledger, feedback);
+                    businesses, new VaultTransferRepository(database), ledger, feedback);
             vaultTransfers.recoverIncomplete();
-            ChatPromptService prompts = new ChatPromptService(this);
+            ChatPromptService prompts = new ChatPromptService(this, feedback);
             GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback, vaultTransfers);
             getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
@@ -91,6 +95,25 @@ public final class CityCorePlugin extends JavaPlugin {
             throw new IllegalStateException("Изменение economy.currency-scale требует полного перезапуска сервера");
         }
         config = next;
+    }
+    private void migrateConfigIfNeeded() {
+        File file = new File(getDataFolder(), "config.yml");
+        YamlConfiguration raw = YamlConfiguration.loadConfiguration(file);
+        if (raw.getInt("config-version", 1) >= 2) return;
+        raw.set("config-version", 2);
+        raw.set("gui.sound-open", true);
+        raw.set("gui.sound-click", true);
+        raw.set("gui.sound-results", true);
+        raw.set("gui.sound-open-effect", "BLOCK_AMETHYST_BLOCK_CHIME");
+        raw.set("gui.sound-click-effect", "UI_BUTTON_CLICK");
+        raw.set("gui.sound-success-effect", "ENTITY_EXPERIENCE_ORB_PICKUP");
+        raw.set("gui.sound-failure-effect", "BLOCK_NOTE_BLOCK_BASS");
+        raw.set("gui.sound-prompt-effect", "BLOCK_NOTE_BLOCK_HAT");
+        try {
+            raw.save(file);
+        } catch (IOException error) {
+            throw new IllegalStateException("Не удалось обновить config.yml до версии 2", error);
+        }
     }
     public CityCoreConfig config() { return config; }
     public EconomyGateway economy() { return economy; }

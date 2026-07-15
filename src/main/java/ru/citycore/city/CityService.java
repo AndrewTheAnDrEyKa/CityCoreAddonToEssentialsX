@@ -135,6 +135,64 @@ public final class CityService {
         });
     }
 
+    public List<CitySummary> activeCities() {
+        return database.transaction(connection -> {
+            List<CitySummary> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT c.id,c.slug,c.name,c.status,COUNT(z.player_uuid) citizen_count
+                    FROM city c LEFT JOIN citizenship z ON z.city_id=c.id
+                    WHERE c.status='ACTIVE'
+                    GROUP BY c.id,c.slug,c.name,c.status
+                    ORDER BY c.name COLLATE NOCASE
+                    """); var rs = query.executeQuery()) {
+                while (rs.next()) result.add(new CitySummary(rs.getString("id"), rs.getString("slug"),
+                        rs.getString("name"), rs.getString("status"), rs.getInt("citizen_count")));
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public List<PlayerApplication> applications(UUID player) {
+        return database.transaction(connection -> {
+            List<PlayerApplication> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT a.id,c.slug,c.name,a.status,a.created_at
+                    FROM citizenship_application a JOIN city c ON c.id=a.city_id
+                    WHERE a.player_uuid=? ORDER BY a.created_at DESC
+                    """)) {
+                query.setString(1, player.toString());
+                try (var rs = query.executeQuery()) {
+                    while (rs.next()) result.add(new PlayerApplication(rs.getString("id"), rs.getString("slug"),
+                            rs.getString("name"), rs.getString("status"), Instant.parse(rs.getString("created_at"))));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public List<Member> members(UUID actor) {
+        return database.transaction(connection -> {
+            Membership membership = membership(connection, actor);
+            if (membership == null) throw new IllegalStateException("Игрок не состоит в городе");
+            List<Member> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT z.player_uuid,p.last_name,z.role,z.joined_at
+                    FROM citizenship z JOIN player_profile p ON p.uuid=z.player_uuid
+                    WHERE z.city_id=?
+                    ORDER BY CASE z.role WHEN 'MAYOR' THEN 0 WHEN 'OFFICIAL' THEN 1 ELSE 2 END,
+                             p.last_name COLLATE NOCASE
+                    """)) {
+                query.setString(1, membership.cityId());
+                try (var rs = query.executeQuery()) {
+                    while (rs.next()) result.add(new Member(UUID.fromString(rs.getString("player_uuid")),
+                            rs.getString("last_name"), CityRole.valueOf(rs.getString("role")),
+                            Instant.parse(rs.getString("joined_at"))));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
     public CityView view(UUID player) {
         return database.transaction(connection -> {
             Membership membership = membership(connection, player); if (membership == null) return null;
@@ -170,5 +228,8 @@ public final class CityService {
     public record CreatedCity(String id, String slug, String name, String treasuryAccountId) {}
     public record Membership(String cityId, CityRole role) {}
     public record Application(String id, UUID playerId, String playerName, Instant createdAt) {}
+    public record CitySummary(String id, String slug, String name, String status, int citizenCount) {}
+    public record PlayerApplication(String id, String citySlug, String cityName, String status, Instant createdAt) {}
+    public record Member(UUID playerId, String playerName, CityRole role, Instant joinedAt) {}
     public record CityView(String id, String slug, String name, String status, CityRole role, long treasuryMinor) {}
 }

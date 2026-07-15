@@ -5,6 +5,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 
 public final class GuiListener implements Listener {
     private final GuiService gui;
@@ -20,5 +21,8 @@ public final class GuiListener implements Listener {
     @EventHandler public void onDrag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder(false) instanceof CityCoreHolder) event.setCancelled(true);
     }
-}
 
+    @EventHandler public void onQuit(PlayerQuitEvent event) {
+        gui.clear(event.getPlayer().getUniqueId());
+    }
+}
