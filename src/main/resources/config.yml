@@ -1,9 +1,11 @@
-config-version: 2
+config-version: 3
 database:
   file: citycore.db
   pool-size: 4
 economy:
   currency-scale: 2
+  emission-enabled: true
+  emission-max-amount: "1000000.00"
 security:
   warn-offline-mode: true
 gui:
@@ -20,3 +22,12 @@ gui:
   sound-failure-effect: "BLOCK_NOTE_BLOCK_BASS"
   sound-prompt-effect: "BLOCK_NOTE_BLOCK_HAT"
   custom-heads: false
+integrations:
+  luckperms:
+    enabled: true
+    groups:
+      default: "citycore_default"
+      citizen: "citycore_default"
+      official: "citycore_official"
+      mayor: "citycore_mayor"
+      police: "citycore_police"

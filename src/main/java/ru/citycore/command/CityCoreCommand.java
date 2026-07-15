@@ -16,16 +16,28 @@ import ru.citycore.db.StorageExecutor;
 import ru.citycore.gui.GuiService;
 import ru.citycore.gui.Route;
 import ru.citycore.gui.UiText;
+import ru.citycore.permission.RoleMirror;
 
 import java.util.List;
 import java.util.UUID;
 
 public final class CityCoreCommand implements CommandExecutor, TabCompleter {
-    private final CityCorePlugin plugin; private final GuiService gui; private final StorageExecutor storage; private final CityService cities; private final BusinessService businesses; private final VaultTransferCoordinator vaultTransfers;
-    public CityCoreCommand(CityCorePlugin plugin, GuiService gui, StorageExecutor storage, CityService cities, BusinessService businesses, VaultTransferCoordinator vaultTransfers) {
-        this.plugin = plugin; this.gui = gui; this.storage = storage; this.cities = cities; this.businesses = businesses; this.vaultTransfers = vaultTransfers;
+    private final CityCorePlugin plugin; private final GuiService gui; private final StorageExecutor storage; private final CityService cities; private final BusinessService businesses; private final VaultTransferCoordinator vaultTransfers; private final RoleMirror roleMirror;
+    public CityCoreCommand(CityCorePlugin plugin, GuiService gui, StorageExecutor storage, CityService cities, BusinessService businesses, VaultTransferCoordinator vaultTransfers, RoleMirror roleMirror) {
+        this.plugin = plugin; this.gui = gui; this.storage = storage; this.cities = cities; this.businesses = businesses; this.vaultTransfers = vaultTransfers; this.roleMirror = roleMirror;
     }
     @Override public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, String[] args) {
+        if (!command.getName().equalsIgnoreCase("citycore")) {
+            if (!(sender instanceof Player player)) { UiText.info(sender, "Этот раздел открывается только игроком."); return true; }
+            Route target = switch (command.getName().toLowerCase(java.util.Locale.ROOT)) {
+                case "citycoreadmin" -> Route.ADMIN;
+                case "citycoremayor" -> Route.MAYOR;
+                case "citycoregovernment" -> Route.GOVERNMENT;
+                default -> Route.HOME;
+            };
+            gui.open(player, target);
+            return true;
+        }
         if (args.length == 0) {
             if (sender instanceof Player player) gui.open(player, Route.HOME);
             else UiText.info(sender, "Использование из консоли: /cc status");
@@ -43,12 +55,13 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
         }
         if (args[0].equalsIgnoreCase("city") && args.length >= 4 && args[1].equalsIgnoreCase("create") && sender instanceof Player player) {
             String name = String.join(" ", java.util.Arrays.copyOfRange(args, 3, args.length));
-            UiText.info(sender, "Создаём город…");
-            storage.submit(() -> cities.create(player.getUniqueId(), args[2], name)).whenComplete((city, error) ->
+            UiText.info(sender, "Отправляем заявку на основание города…");
+            storage.submit(() -> cities.submitFoundation(player.getUniqueId(), args[2], name,
+                    "Заявка подана через команду /cc city create")).whenComplete((application, error) ->
                     plugin.getServer().getScheduler().runTask(plugin, () -> {
                         if (!player.isOnline()) return;
-                        if (error != null) UiText.error(player, "Город не создан: " + rootMessage(error));
-                        else UiText.success(player, "Город «" + city.name() + "» создан. Вы назначены мэром.");
+                        if (error != null) UiText.error(player, "Заявка не отправлена: " + rootMessage(error));
+                        else UiText.success(player, "Заявка на город «" + application.name() + "» отправлена администрации.");
                     }));
             return true;
         }
@@ -73,7 +86,11 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
         if (args[0].equalsIgnoreCase("city") && args.length == 3 && (args[1].equalsIgnoreCase("accept") || args[1].equalsIgnoreCase("reject")) && sender instanceof Player player) {
             try {
                 UUID applicant = UUID.fromString(args[2]); boolean accept = args[1].equalsIgnoreCase("accept");
-                runAsync(player, () -> { cities.decide(player.getUniqueId(), applicant, accept); return accept ? "Заявка принята." : "Заявка отклонена."; });
+                runAsync(player, () -> {
+                    cities.decide(player.getUniqueId(), applicant, accept);
+                    if (accept) roleMirror.sync(applicant, CityRole.CITIZEN);
+                    return accept ? "Заявка принята." : "Заявка отклонена.";
+                });
             } catch (IllegalArgumentException invalid) { UiText.error(player, "Укажите UUID из списка /cc city applications."); }
             return true;
         }
@@ -85,7 +102,11 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
                     case "official" -> ru.citycore.city.CityRole.OFFICIAL;
                     default -> throw new IllegalArgumentException();
                 };
-                runAsync(player, () -> { cities.setRole(player.getUniqueId(), member, role); return "Новая должность: " + roleLabel(role) + "."; });
+                runAsync(player, () -> {
+                    cities.setRole(player.getUniqueId(), member, role);
+                    roleMirror.sync(member, role);
+                    return "Новая должность: " + roleLabel(role) + ".";
+                });
             } catch (IllegalArgumentException invalid) { UiText.error(player, "Формат: /cc city role <UUID> <citizen|official>"); }
             return true;
         }

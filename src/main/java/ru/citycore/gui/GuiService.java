@@ -16,8 +16,12 @@ import ru.citycore.city.CityRole;
 import ru.citycore.city.CityService;
 import ru.citycore.db.StorageExecutor;
 import ru.citycore.economy.EconomyGateway;
+import ru.citycore.economy.EmissionService;
 import ru.citycore.economy.MinorUnits;
 import ru.citycore.economy.VaultTransferCoordinator;
+import ru.citycore.permission.RoleMirror;
+import ru.citycore.permission.Capability;
+import ru.citycore.permission.CapabilityService;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -64,8 +68,8 @@ public final class GuiService {
                     "Неизменяемая история решений и операций.")),
             Map.entry("objects", new PlannedModule(Material.PISTON, "Объекты и ресурсы", "Вертикальное ядро",
                     "Контроллеры производств и расчётные циклы.")),
-            Map.entry("roadmap", new PlannedModule(Material.FILLED_MAP, "Карта развития", "alpha.16",
-                    "Сейчас расширяется вертикальное ядро CityCore."))
+            Map.entry("roadmap", new PlannedModule(Material.FILLED_MAP, "Карта развития", "alpha.17",
+                    "Сейчас закрепляется модульная панель и контур власти."))
     );
 
     private final CityCorePlugin plugin;
@@ -76,16 +80,20 @@ public final class GuiService {
     private final ChatPromptService prompts;
     private final GuiFeedback feedback;
     private final VaultTransferCoordinator vaultTransfers;
+    private final EmissionService emission;
+    private final RoleMirror roleMirror;
+    private final CapabilityService capabilities = new CapabilityService();
     private final NamespacedKey actionKey;
     private final Map<UUID, String> selectedBusiness = new ConcurrentHashMap<>();
     private final Map<UUID, CityService.Application> selectedApplication = new ConcurrentHashMap<>();
+    private final Map<UUID, CityService.FoundationApplication> selectedFoundation = new ConcurrentHashMap<>();
     private final Map<UUID, PlannedModule> selectedPlanned = new ConcurrentHashMap<>();
     private final Map<UUID, Confirmation> confirmations = new ConcurrentHashMap<>();
     private final Map<UUID, Map<Route, Route>> returnRoutes = new ConcurrentHashMap<>();
 
     public GuiService(CityCorePlugin plugin, EconomyGateway economy, StorageExecutor storage, CityService cities,
                       BusinessService businesses, ChatPromptService prompts, GuiFeedback feedback,
-                      VaultTransferCoordinator vaultTransfers) {
+                      VaultTransferCoordinator vaultTransfers, EmissionService emission, RoleMirror roleMirror) {
         this.plugin = plugin;
         this.economy = economy;
         this.storage = storage;
@@ -94,6 +102,8 @@ public final class GuiService {
         this.prompts = prompts;
         this.feedback = feedback;
         this.vaultTransfers = vaultTransfers;
+        this.emission = emission;
+        this.roleMirror = roleMirror;
         this.actionKey = new NamespacedKey(plugin, "gui_action");
     }
 
@@ -106,8 +116,18 @@ public final class GuiService {
     }
 
     private void open(Player player, Route route, boolean openingSound) {
-        if (route == Route.ADMIN && !player.hasPermission("citycore.admin")) {
+        if (route == Route.ADMIN && !capabilities.allows(player, null, Capability.ADMIN_WORKSPACE)) {
             UiText.error(player, "У вас нет доступа к управлению системой.");
+            route = Route.HOME;
+        }
+        if ((route == Route.CITY_FOUNDATIONS_ADMIN || route == Route.CITY_FOUNDATION_DETAIL)
+                && !capabilities.allows(player, null, Capability.REVIEW_CITY_FOUNDATIONS)) {
+            UiText.error(player, "У вас нет доступа к основанию городов.");
+            route = Route.HOME;
+        }
+        if (route == Route.EMISSION && (!capabilities.allows(player, null, Capability.ISSUE_CURRENCY)
+                || !plugin.config().emissionEnabled())) {
+            UiText.error(player, "Эмиссия недоступна.");
             route = Route.HOME;
         }
         CityCoreHolder holder = new CityCoreHolder(route);
@@ -134,7 +154,12 @@ public final class GuiService {
             case BUSINESS_DETAIL -> renderBusinessDetail(player, inventory);
             case LICENSES -> renderLicenses(player, inventory);
             case ECONOMY -> renderEconomy(player, inventory);
-            case ADMIN -> renderAdmin(inventory);
+            case MAYOR -> renderMayor(player, inventory);
+            case GOVERNMENT -> renderGovernment(player, inventory);
+            case ADMIN -> renderAdmin(player, inventory);
+            case CITY_FOUNDATIONS_ADMIN -> renderFoundationApplications(player, inventory);
+            case CITY_FOUNDATION_DETAIL -> renderFoundationDetail(player, inventory);
+            case EMISSION -> renderEmission(player, inventory);
             case PLANNED -> renderPlanned(player, inventory);
             case CONFIRM -> renderConfirmation(player, inventory);
         }
@@ -142,36 +167,60 @@ public final class GuiService {
     }
 
     private void renderHome(Player player, Inventory inventory) {
-        inventory.setItem(4, info(Material.NETHER_STAR, "CityCore · Городская сеть",
-                "Ваши города, предприятия и общественные системы", "alpha.16 · вертикальное ядро"));
-        inventory.setItem(10, button(Material.PLAYER_HEAD, "Мой профиль", "route:PROFILE",
-                "Гражданство, должность и личный баланс"));
-        inventory.setItem(12, button(Material.BELL, "Город", "route:CITY",
-                "Жители, заявки, казна и управление"));
-        inventory.setItem(14, button(Material.BRICKS, "Предприятия", "route:BUSINESS",
-                "Регистрация, решения и счета компаний"));
-        inventory.setItem(16, button(Material.GOLD_INGOT, "Финансы", "route:ECONOMY",
-                "Личный кошелёк и внутренние счета"));
+        inventory.setItem(4, info(Material.NETHER_STAR, "CityCore · Центр решений",
+                "Техническая панель города и экономики", "alpha.17 · модульная навигация"));
 
-        inventory.setItem(19, button(Material.ENCHANTED_BOOK, "Лицензии", "route:LICENSES",
-                "Разрешения ваших предприятий и города"));
-        inventory.setItem(21, plannedButton("notifications"));
-        inventory.setItem(23, plannedButton("documents"));
-        inventory.setItem(25, plannedButton("organizations"));
+        inventory.setItem(9, lane(Material.PLAYER_HEAD, "Личное"));
+        inventory.setItem(10, button(Material.PLAYER_HEAD, "Профиль", "route:PROFILE",
+                "Гражданство, должность и личный баланс", "Статус: доступно"));
+        inventory.setItem(12, button(Material.GOLD_INGOT, "Финансы", "route:ECONOMY",
+                "Кошелёк, казна и счета предприятий", "Статус: доступно"));
+        inventory.setItem(14, plannedCard("documents"));
+        inventory.setItem(16, plannedCard("notifications"));
 
-        inventory.setItem(28, plannedButton("market"));
-        inventory.setItem(30, plannedButton("property"));
-        inventory.setItem(32, plannedButton("delivery"));
-        inventory.setItem(34, plannedButton("services"));
+        inventory.setItem(18, lane(Material.BELL, "Город"));
+        inventory.setItem(19, button(Material.COMPASS, "Каталог городов", "route:CITY_DIRECTORY",
+                "Найти город и подать заявление", "Статус: доступно"));
+        inventory.setItem(21, button(Material.BELL, "Мой город", "route:CITY",
+                "Гражданство, жители и городская казна", "Статус: доступно"));
+        inventory.setItem(23, loading("Проверяем основание города…"));
+        inventory.setItem(25, loading("Проверяем городские связи…"));
 
-        inventory.setItem(40, plannedButton("roadmap"));
-        if (player.hasPermission("citycore.admin")) {
-            inventory.setItem(42, button(Material.COMMAND_BLOCK, "Управление системой", "route:ADMIN",
-                    "Диагностика, аудит и безопасные настройки"));
-        } else {
-            inventory.setItem(42, info(Material.CLOCK, "Состояние проекта",
-                    "Работает вертикальное ядро alpha.16", "Следующий этап: объекты, налоги и аудит"));
-        }
+        inventory.setItem(27, lane(Material.GOLD_INGOT, "Экономика"));
+        inventory.setItem(28, button(Material.BRICKS, "Предприятия", "route:BUSINESS",
+                "Регистрация, карточки и счета компаний", "Статус: доступно"));
+        inventory.setItem(30, button(Material.ENCHANTED_BOOK, "Лицензии", "route:LICENSES",
+                "Разрешения предприятий вашего города", "Статус: доступно"));
+        inventory.setItem(32, plannedCard("objects"));
+        inventory.setItem(34, plannedCard("market"));
+
+        inventory.setItem(36, lane(Material.COMPASS, "Сервисы"));
+        inventory.setItem(37, plannedCard("organizations"));
+        inventory.setItem(39, plannedCard("property"));
+        inventory.setItem(41, plannedCard("delivery"));
+        inventory.setItem(43, plannedCard("services"));
+
+        inventory.setItem(45, lane(Material.NAME_TAG, "Разделы по роли"));
+        inventory.setItem(49, loading("Проверяем полномочия…"));
+        storage.submit(() -> new HomeContext(cities.view(player.getUniqueId()), cities.latestFoundation(player.getUniqueId())))
+                .whenComplete((context, error) -> sync(player, inventory, () -> {
+                    if (error != null) {
+                        inventory.setItem(23, errorItem(error));
+                        inventory.setItem(25, errorItem(error));
+                        inventory.setItem(49, errorItem(error));
+                        return;
+                    }
+                    renderFoundationShortcut(inventory, context.city(), context.foundation());
+                    if (context.city() == null) {
+                        inventory.setItem(25, disabled(Material.PLAYER_HEAD, "Жители города",
+                                "Недоступно: вы пока не состоите в городе"));
+                    } else {
+                        inventory.setItem(25, button(Material.PLAYER_HEAD, "Жители · " + context.city().name(),
+                                "route:CITY_MEMBERS", "Состав и должности вашего города",
+                                "Ваша роль: " + roleLabel(context.city().role())));
+                    }
+                    renderAuthorityNavigation(player, inventory, context.city());
+                }));
     }
 
     private void renderProfile(Player player, Inventory inventory) {
@@ -203,7 +252,8 @@ public final class GuiService {
 
     private void renderCity(Player player, Inventory inventory) {
         inventory.setItem(22, loading("Загрузка городского профиля…"));
-        storage.submit(() -> new CityScreenData(cities.view(player.getUniqueId()), cities.applications(player.getUniqueId())))
+        storage.submit(() -> new CityScreenData(cities.view(player.getUniqueId()),
+                        cities.applications(player.getUniqueId()), cities.latestFoundation(player.getUniqueId())))
                 .whenComplete((data, error) -> sync(player, inventory, () -> {
                     if (error != null) {
                         inventory.setItem(22, errorItem(error));
@@ -214,8 +264,7 @@ public final class GuiService {
                                 "Гражданство оформляется через заявление", "Одновременно доступен один город"));
                         inventory.setItem(20, button(Material.COMPASS, "Каталог городов", "route:CITY_DIRECTORY",
                                 "Выбрать активный город и подать заявление"));
-                        inventory.setItem(24, button(Material.BELL, "Основать город", "prompt:city_create",
-                                "Создать город и стать его первым мэром"));
+                        renderFoundationShortcutAt(inventory, 24, null, data.foundation());
                         int index = 0;
                         for (CityService.PlayerApplication application : data.applications()) {
                             if (index >= 5) break;
@@ -247,9 +296,11 @@ public final class GuiService {
                             "Компании, регистрации и лицензии"));
                     inventory.setItem(33, button(Material.HOPPER, "Пополнить казну", "prompt:treasury_deposit",
                             "Перевести личные средства городу"));
-                    inventory.setItem(38, plannedButton("taxes"));
-                    inventory.setItem(40, plannedButton("laws"));
-                    inventory.setItem(42, plannedButton("objects"));
+                    inventory.setItem(37, disabled(Material.BELL, "Основать другой город",
+                            "Недоступно: сначала необходимо покинуть текущее гражданство"));
+                    inventory.setItem(39, plannedCard("taxes"));
+                    inventory.setItem(41, plannedCard("laws"));
+                    inventory.setItem(43, plannedCard("objects"));
                 }));
     }
 
@@ -489,17 +540,156 @@ public final class GuiService {
                 }));
     }
 
-    private void renderAdmin(Inventory inventory) {
-        inventory.setItem(13, info(Material.COMMAND_BLOCK, "CityCore alpha.16",
-                "Вертикальное ядро", "Схема базы данных: 3"));
-        inventory.setItem(20, button(Material.COMPARATOR, "Проверить состояние", "command:status",
-                "Версия, база данных и подключение Vault"));
-        inventory.setItem(24, button(Material.REPEATER, "Перечитать настройки", "command:reload",
-                "Применить безопасные параметры config.yml"));
-        inventory.setItem(29, plannedButton("audit"));
-        inventory.setItem(31, plannedButton("objects"));
-        inventory.setItem(33, info(Material.CHEST, "Очередь восстановления",
-                "Vault-переводы восстанавливаются автоматически", "Ручная панель появится вместе с аудитом"));
+    private void renderMayor(Player player, Inventory inventory) {
+        inventory.setItem(22, loading("Проверяем полномочия мэра…"));
+        storage.submit(() -> cities.view(player.getUniqueId())).whenComplete((city, error) ->
+                sync(player, inventory, () -> {
+                    if (error != null) { inventory.setItem(22, errorItem(error)); return; }
+                    if (!capabilities.allows(player, city, Capability.MAYOR_WORKSPACE)) {
+                        inventory.setItem(22, disabled(Material.BARRIER, "Раздел мэрии недоступен",
+                                "Требуется роль мэра действующего города"));
+                        return;
+                    }
+                    inventory.setItem(4, info(Material.GOLDEN_HELMET, "Мэрия · " + city.name(),
+                            "Рабочий раздел главы города", "Казна: " + formatMinor(city.treasuryMinor())));
+                    inventory.setItem(10, button(Material.WRITABLE_BOOK, "Заявления жителей", "route:CITY_APPLICATIONS",
+                            "Рассмотреть запросы на гражданство", "Раздел: население"));
+                    inventory.setItem(12, button(Material.PLAYER_HEAD, "Жители и должности", "route:CITY_MEMBERS",
+                            "Состав города и назначение чиновников", "Раздел: управление"));
+                    inventory.setItem(14, button(Material.BRICKS, "Предприятия города", "route:BUSINESS",
+                            "Компании и их текущее состояние", "Раздел: экономика"));
+                    inventory.setItem(16, button(Material.ENCHANTED_BOOK, "Регистрации и лицензии", "route:BUSINESS_PENDING",
+                            "Решения по новым предприятиям", "Раздел: экономика"));
+                    inventory.setItem(28, button(Material.GOLD_BLOCK, "Казна и счета", "route:ECONOMY",
+                            "Баланс города и пополнение", "Раздел: финансы"));
+                    inventory.setItem(30, plannedCard("taxes"));
+                    inventory.setItem(32, plannedCard("laws"));
+                    inventory.setItem(34, plannedCard("objects"));
+                    inventory.setItem(22, info(Material.COMPASS, "Центр решений",
+                            "Здесь находятся переходы, доступные мэру", "Операции выполняются внутри разделов"));
+                }));
+    }
+
+    private void renderGovernment(Player player, Inventory inventory) {
+        inventory.setItem(22, loading("Проверяем полномочия госструктуры…"));
+        storage.submit(() -> cities.view(player.getUniqueId())).whenComplete((city, error) ->
+                sync(player, inventory, () -> {
+                    if (error != null) { inventory.setItem(22, errorItem(error)); return; }
+                    if (!capabilities.allows(player, city, Capability.GOVERNMENT_WORKSPACE)) {
+                        inventory.setItem(22, disabled(Material.BARRIER, "Служебный раздел недоступен",
+                                "Требуется городская должность"));
+                        return;
+                    }
+                    inventory.setItem(4, info(Material.SHIELD, "Управление · " + city.name(),
+                            "Рабочие реестры городской службы", "Должность: " + roleLabel(city.role())));
+                    inventory.setItem(10, button(Material.BRICKS, "Реестр предприятий", "route:BUSINESS",
+                            "Компании вашего города", "Статус: доступно"));
+                    inventory.setItem(12, button(Material.WRITABLE_BOOK, "Очередь регистраций", "route:BUSINESS_PENDING",
+                            "Одобрение и отклонение компаний", "Статус: доступно"));
+                    inventory.setItem(14, button(Material.ENCHANTED_BOOK, "Реестр лицензий", "route:LICENSES",
+                            "Выданные разрешения предприятий", "Статус: доступно"));
+                    inventory.setItem(16, button(Material.PLAYER_HEAD, "Жители", "route:CITY_MEMBERS",
+                            "Состав городского населения", "Статус: доступно"));
+                    inventory.setItem(28, plannedCard("documents"));
+                    inventory.setItem(30, plannedCard("organizations"));
+                    inventory.setItem(32, plannedCard("services"));
+                    inventory.setItem(34, plannedCard("audit"));
+                    inventory.setItem(22, info(Material.COMPASS, "Служебные переходы",
+                            "Полномочия проверяются повторно при действии", "LuckPerms не является источником роли"));
+                }));
+    }
+
+    private void renderAdmin(Player player, Inventory inventory) {
+        inventory.setItem(4, info(Material.COMMAND_BLOCK, "CityCore alpha.17",
+                "Административный центр", "Схема базы данных: 4"));
+        inventory.setItem(10, button(Material.COMPARATOR, "Состояние системы", "command:status",
+                "Версия, база данных и подключение Vault", "Действие: диагностика"));
+        inventory.setItem(12, button(Material.REPEATER, "Перечитать настройки", "command:reload",
+                "Применить безопасные параметры config.yml", "Действие: конфигурация"));
+        if (capabilities.allows(player, null, Capability.REVIEW_CITY_FOUNDATIONS)) {
+            inventory.setItem(14, button(Material.FILLED_MAP, "Основание городов", "route:CITY_FOUNDATIONS_ADMIN",
+                    "Очередь заявок новых городов", "Действие: административное решение"));
+        } else inventory.setItem(14, disabled(Material.MAP, "Основание городов", "Нет citycore.admin.cities"));
+        if (capabilities.allows(player, null, Capability.ISSUE_CURRENCY) && plugin.config().emissionEnabled()) {
+            inventory.setItem(16, button(Material.RAW_GOLD, "Эмиссия", "route:EMISSION",
+                    "Явное пополнение казны через ledger", "Каждая операция требует основания"));
+        } else inventory.setItem(16, disabled(Material.IRON_NUGGET, "Эмиссия", "Функция отключена или нет права"));
+        inventory.setItem(28, plannedCard("audit"));
+        inventory.setItem(30, plannedCard("objects"));
+        inventory.setItem(32, info(Material.CHEST, "Восстановление переводов",
+                "Vault и эмиссия имеют idempotency key", "Незавершённые операции проверяются при запуске"));
+        inventory.setItem(34, info(Material.RECOVERY_COMPASS, "События SLMC",
+                "Архитектура зафиксирована в ТЗ v0.3", "Раздел появится только вместе с рабочим ядром событий"));
+    }
+
+    private void renderFoundationApplications(Player player, Inventory inventory) {
+        inventory.setItem(22, loading("Загрузка заявок на основание…"));
+        storage.submit(cities::pendingFoundations).whenComplete((items, error) -> sync(player, inventory, () -> {
+            clearList(inventory);
+            if (error != null) { inventory.setItem(22, errorItem(error)); return; }
+            if (items.isEmpty()) {
+                inventory.setItem(22, info(Material.MAP, "Очередь пуста", "Новых заявок на основание города нет"));
+                return;
+            }
+            for (int i = 0; i < items.size() && i < LIST_SLOTS.length; i++) {
+                CityService.FoundationApplication application = items.get(i);
+                inventory.setItem(LIST_SLOTS[i], playerHead(application.founderId(), application.name(),
+                        "foundation_view:" + application.id(), "Основатель: " + application.founderName(),
+                        "ID: " + application.slug(), "Подано: " + date(application.createdAt())));
+            }
+        }));
+    }
+
+    private void renderFoundationDetail(Player player, Inventory inventory) {
+        CityService.FoundationApplication application = selectedFoundation.get(player.getUniqueId());
+        if (application == null) {
+            inventory.setItem(22, disabled(Material.BARRIER, "Заявка не выбрана",
+                    "Вернитесь к очереди и выберите город"));
+            return;
+        }
+        inventory.setItem(4, info(Material.FILLED_MAP, application.name(), "ID: " + application.slug(),
+                "Статус: " + statusLabel(application.status())));
+        inventory.setItem(13, playerHead(application.founderId(), application.founderName(), null,
+                "Предлагаемый основатель и первый мэр", "Подано: " + date(application.createdAt())));
+        inventory.setItem(22, info(Material.WRITABLE_BOOK, "Описание", application.description(),
+                "Одобрение создаст город без начальной эмиссии"));
+        inventory.setItem(29, button(Material.LIME_CONCRETE, "Одобрить основание",
+                "foundation_approve:" + application.id(), "Создать город и назначить основателя мэром",
+                "Решение будет записано в аудит"));
+        inventory.setItem(33, button(Material.RED_CONCRETE, "Отклонить заявку",
+                "foundation_reject:" + application.id(), "Закрыть заявку без создания города",
+                "Решение будет записано в аудит"));
+    }
+
+    private void renderEmission(Player player, Inventory inventory) {
+        inventory.setItem(4, info(Material.RAW_GOLD, "Контролируемая эмиссия",
+                "Получатель первого этапа: казна города",
+                "Лимит операции: " + formatMinor(plugin.config().emissionMaxMinor())));
+        inventory.setItem(22, loading("Загрузка городов и журнала…"));
+        storage.submit(() -> new EmissionScreenData(cities.activeCities(), emission.recent(7)))
+                .whenComplete((data, error) -> sync(player, inventory, () -> {
+                    clearList(inventory);
+                    if (error != null) { inventory.setItem(22, errorItem(error)); return; }
+                    int targetLimit = Math.min(14, data.cities().size());
+                    for (int i = 0; i < targetLimit; i++) {
+                        CityService.CitySummary city = data.cities().get(i);
+                        inventory.setItem(LIST_SLOTS[i], button(Material.GOLD_BLOCK, city.name(),
+                                "emission_city:" + city.slug(), "Получатель: городская казна",
+                                "ID города: " + city.slug(), "Далее: сумма и основание"));
+                    }
+                    if (targetLimit == 0) inventory.setItem(22, info(Material.MAP, "Нет активных городов",
+                            "Эмиссию нельзя выполнить без казначейского счёта"));
+                    int recent = 0;
+                    for (EmissionService.Issue issue : data.issues()) {
+                        if (recent >= 7) break;
+                        inventory.setItem(37 + recent++, info(statusMaterial(issue.state()),
+                                issue.targetName() + " · " + formatMinor(issue.amountMinor()),
+                                "Состояние: " + statusLabel(issue.state()),
+                                "Основание: " + shorten(issue.reason(), 42), "Дата: " + date(issue.createdAt())));
+                    }
+                    if (recent == 0) inventory.setItem(40, info(Material.PAPER, "История пуста",
+                            "Выполненные операции появятся в этой строке"));
+                }));
     }
 
     private void renderPlanned(Player player, Inventory inventory) {
@@ -530,13 +720,35 @@ public final class GuiService {
     }
 
     private void renderNavigation(Player player, Route route, Inventory inventory) {
-        if (route != Route.HOME) inventory.setItem(BACK_SLOT, button(Material.ARROW, "Назад", "back",
-                "Вернуться к предыдущему разделу"));
-        if (route == Route.HOME) inventory.setItem(HOME_SLOT, info(Material.NETHER_STAR, "CityCore",
-                "Главный экран городской сети"));
-        else inventory.setItem(HOME_SLOT, button(Material.COMPASS, "Главный экран", "route:HOME",
-                "Открыть все разделы CityCore"));
+        if (route != Route.HOME) {
+            inventory.setItem(BACK_SLOT, button(Material.ARROW, "Назад", "back",
+                    "Вернуться к предыдущему разделу"));
+            inventory.setItem(HOME_SLOT, button(Material.COMPASS, "Главная панель", "route:HOME",
+                    "Открыть центр решений CityCore"));
+        }
         inventory.setItem(CLOSE_SLOT, button(Material.BARRIER, "Закрыть", "close", "Вернуться в игру"));
+    }
+
+    private void renderAuthorityNavigation(Player player, Inventory inventory, CityService.CityView city) {
+        for (int slot = 46; slot <= 52; slot++) inventory.setItem(slot, null);
+        boolean hasRoleSection = false;
+        if (capabilities.allows(player, city, Capability.MAYOR_WORKSPACE)) {
+            inventory.setItem(47, button(Material.GOLDEN_HELMET, "Мэрия", "route:MAYOR",
+                    "Рабочие реестры главы города", "Переход в служебный раздел"));
+            hasRoleSection = true;
+        } else if (capabilities.allows(player, city, Capability.GOVERNMENT_WORKSPACE)) {
+            inventory.setItem(47, button(Material.SHIELD, "Городское управление", "route:GOVERNMENT",
+                    "Реестры и решения чиновника", "Переход в служебный раздел"));
+            hasRoleSection = true;
+        }
+        boolean admin = capabilities.allows(player, city, Capability.ADMIN_WORKSPACE);
+        if (admin) {
+            inventory.setItem(hasRoleSection ? 51 : 49, button(Material.COMMAND_BLOCK,
+                    "Администрирование", "route:ADMIN", "Система, города и эмиссия",
+                    "Переход в административный раздел"));
+        }
+        if (!hasRoleSection && !admin) inventory.setItem(49, info(Material.LIGHT_GRAY_DYE, "Нет служебных разделов",
+                "Здесь появятся переходы, доступные по вашей роли"));
     }
 
     public String action(ItemStack item) {
@@ -574,6 +786,33 @@ public final class GuiService {
             confirm(player, "Заявление в город «" + slug + "»",
                     "После отправки решение должен принять мэр.", "Подать заявление",
                     () -> { cities.apply(player.getUniqueId(), slug); return "Заявление отправлено мэру города."; }, Route.CITY);
+        } else if (action.startsWith("foundation_view:")) {
+            if (!capabilities.allows(player, null, Capability.REVIEW_CITY_FOUNDATIONS)) { UiText.error(player, "Нет доступа к заявкам городов."); return; }
+            String id = action.substring("foundation_view:".length());
+            storage.submit(cities::pendingFoundations).whenComplete((items, error) ->
+                    plugin.getServer().getScheduler().runTask(plugin, () -> {
+                        if (!player.isOnline()) return;
+                        if (error != null) { failure(player, error); return; }
+                        items.stream().filter(item -> item.id().equals(id)).findFirst().ifPresentOrElse(item -> {
+                            selectedFoundation.put(player.getUniqueId(), item);
+                            rememberReturn(player, Route.CITY_FOUNDATION_DETAIL, current);
+                            navigate(player, Route.CITY_FOUNDATION_DETAIL);
+                        }, () -> UiText.info(player, "Заявка уже обработана или удалена из очереди."));
+                    }));
+        } else if (action.startsWith("foundation_approve:") || action.startsWith("foundation_reject:")) {
+            boolean approve = action.startsWith("foundation_approve:");
+            String id = action.substring(action.indexOf(':') + 1);
+            CityService.FoundationApplication selected = selectedFoundation.get(player.getUniqueId());
+            if (selected == null || !selected.id().equals(id)) return;
+            confirmPermission(player, approve ? "Одобрить основание города" : "Отклонить основание города",
+                    approve ? "Будет создан город «" + selected.name() + "», а основатель станет мэром."
+                            : "Заявка будет закрыта без создания города.",
+                    approve ? "Создать город" : "Отклонить заявку", () -> {
+                        CityService.FoundationDecision decision = cities.decideFoundation(player.getUniqueId(), id, approve,
+                                approve ? "Одобрено через административную панель" : "Отклонено через административную панель");
+                        if (approve) roleMirror.sync(selected.founderId(), CityRole.MAYOR);
+                        return decision.approved() ? "Город «" + selected.name() + "» создан." : "Заявка отклонена.";
+                    }, Route.CITY_FOUNDATIONS_ADMIN, "citycore.admin.cities");
         } else if (action.startsWith("city_application:")) {
             UUID applicant = uuid(action.substring("city_application:".length()));
             if (applicant == null) return;
@@ -596,7 +835,11 @@ public final class GuiService {
             confirm(player, accept ? "Принять нового жителя" : "Отклонить заявление",
                     accept ? "Игрок получит гражданство и роль жителя." : "Заявление будет закрыто без гражданства.",
                     accept ? "Принять" : "Отклонить",
-                    () -> { cities.decide(player.getUniqueId(), applicant, accept); return accept ? "Игрок принят в город." : "Заявление отклонено."; },
+                    () -> {
+                        cities.decide(player.getUniqueId(), applicant, accept);
+                        if (accept) roleMirror.sync(applicant, CityRole.CITIZEN);
+                        return accept ? "Игрок принят в город." : "Заявление отклонено.";
+                    },
                     Route.CITY_APPLICATIONS);
         } else if (action.startsWith("city_role:")) {
             String[] parts = action.split(":", 3);
@@ -607,6 +850,7 @@ public final class GuiService {
             confirm(player, "Изменить городскую должность", "Новая должность: " + roleLabel(role) + ".",
                     "Изменить должность", () -> {
                         cities.setRole(player.getUniqueId(), member, role);
+                        roleMirror.sync(member, role);
                         return "Должность участника изменена.";
                     }, Route.CITY_MEMBERS);
         } else if (action.startsWith("business_view:")) {
@@ -654,10 +898,14 @@ public final class GuiService {
                     failure(player, error);
                 }
             });
-        } else if (action.equals("prompt:city_create")) {
+        } else if (action.equals("prompt:city_foundation")) {
             prompts.begin(player, "Придумайте системный ID города (a-z, 0-9, _ или -):", slug ->
-                    prompts.begin(player, "Введите отображаемое название города:", name -> execute(player,
-                            () -> { cities.create(player.getUniqueId(), slug, name); return "Город «" + name + "» создан."; }, Route.CITY)));
+                    prompts.begin(player, "Введите отображаемое название города:", name ->
+                            prompts.begin(player, "Кратко опишите идею города (8–180 символов):", description -> execute(player,
+                                    () -> {
+                                        cities.submitFoundation(player.getUniqueId(), slug, name, description);
+                                        return "Заявка на основание города «" + name + "» отправлена администрации.";
+                                    }, Route.CITY))));
         } else if (action.equals("prompt:business_register")) {
             prompts.begin(player, "Придумайте системный ID предприятия:", slug ->
                     prompts.begin(player, "Введите название предприятия:", name -> execute(player,
@@ -672,9 +920,36 @@ public final class GuiService {
                     failure(player, error);
                 }
             });
+        } else if (action.startsWith("emission_city:")) {
+            if (!capabilities.allows(player, null, Capability.ISSUE_CURRENCY) || !plugin.config().emissionEnabled()) {
+                UiText.error(player, "Эмиссия недоступна."); return;
+            }
+            String slug = action.substring("emission_city:".length());
+            prompts.begin(player, "Введите сумму эмиссии для казны «" + slug + "»:", value -> {
+                try {
+                    long amount = MinorUnits.parse(value, plugin.config().currencyScale());
+                    if (amount <= 0 || amount > plugin.config().emissionMaxMinor()) {
+                        throw new IllegalArgumentException("Допустимый диапазон: 0.01–" + formatMinor(plugin.config().emissionMaxMinor()));
+                    }
+                    prompts.begin(player, "Укажите обязательное основание эмиссии:", reason ->
+                            confirmPermission(player, "Эмиссия в казну «" + slug + "»",
+                                    "Будет создано: " + formatMinor(amount) + ". Основание: " + shorten(reason, 70),
+                                    "Выполнить эмиссию", () -> {
+                                        emission.issueToCity(player.getUniqueId(), slug, amount, reason);
+                                        return "Эмиссия выполнена: " + formatMinor(amount) + " → казна «" + slug + "».";
+                                    }, Route.EMISSION, "citycore.admin.emission"));
+                } catch (RuntimeException error) { failure(player, error); }
+            });
         } else if (action.equals("confirm:run")) {
             Confirmation confirmation = confirmations.remove(player.getUniqueId());
             if (confirmation == null) return;
+            if (confirmation.requiredPermission() != null
+                    && !player.hasPermission(confirmation.requiredPermission())) {
+                feedback.failure(player);
+                UiText.error(player, "Полномочие было отозвано. Действие отменено.");
+                navigate(player, confirmation.returnRoute());
+                return;
+            }
             if (confirmation.mainOperation() != null) {
                 player.closeInventory();
                 UiText.info(player, "Перевод отправлен на обработку…");
@@ -690,6 +965,7 @@ public final class GuiService {
     public void clear(UUID playerId) {
         selectedBusiness.remove(playerId);
         selectedApplication.remove(playerId);
+        selectedFoundation.remove(playerId);
         selectedPlanned.remove(playerId);
         confirmations.remove(playerId);
         returnRoutes.remove(playerId);
@@ -697,13 +973,20 @@ public final class GuiService {
 
     private void confirm(Player player, String title, String description, String confirmLabel,
                          Callable<String> operation, Route returnRoute) {
-        confirmations.put(player.getUniqueId(), new Confirmation(title, description, confirmLabel, operation, null, returnRoute));
+        confirmations.put(player.getUniqueId(), new Confirmation(title, description, confirmLabel, operation, null, returnRoute, null));
+        navigate(player, Route.CONFIRM);
+    }
+
+    private void confirmPermission(Player player, String title, String description, String confirmLabel,
+                                   Callable<String> operation, Route returnRoute, String permission) {
+        confirmations.put(player.getUniqueId(), new Confirmation(title, description, confirmLabel,
+                operation, null, returnRoute, permission));
         navigate(player, Route.CONFIRM);
     }
 
     private void confirmMain(Player player, String title, String description, String confirmLabel,
                              Runnable operation, Route returnRoute) {
-        confirmations.put(player.getUniqueId(), new Confirmation(title, description, confirmLabel, null, operation, returnRoute));
+        confirmations.put(player.getUniqueId(), new Confirmation(title, description, confirmLabel, null, operation, returnRoute, null));
         navigate(player, Route.CONFIRM);
     }
 
@@ -733,6 +1016,9 @@ public final class GuiService {
             case CITY_DIRECTORY, CITY_APPLICATIONS, CITY_MEMBERS -> Route.CITY;
             case CITY_APPLICATION_DETAIL -> Route.CITY_APPLICATIONS;
             case BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES -> Route.BUSINESS;
+            case CITY_FOUNDATIONS_ADMIN, EMISSION -> Route.ADMIN;
+            case CITY_FOUNDATION_DETAIL -> Route.CITY_FOUNDATIONS_ADMIN;
+            case MAYOR, GOVERNMENT, ADMIN -> Route.HOME;
             case CONFIRM -> {
                 Confirmation confirmation = confirmations.remove(player.getUniqueId());
                 yield confirmation == null ? Route.HOME : confirmation.returnRoute();
@@ -751,12 +1037,54 @@ public final class GuiService {
                 module.description(), "Этап: " + module.phase());
     }
 
+    private ItemStack plannedCard(String key) {
+        PlannedModule module = PLANNED.get(key);
+        return info(module.material(), module.title(), module.description(),
+                "Статус: в разработке · " + module.phase(), "Кнопка станет активной вместе с механикой");
+    }
+
+    private ItemStack lane(Material material, String name) {
+        return info(material, "— " + name + " —", "Тематическая строка панели");
+    }
+
+    private ItemStack disabled(Material material, String name, String... reason) {
+        String[] lore = Arrays.copyOf(reason, reason.length + 1);
+        lore[lore.length - 1] = "Статус: недоступно";
+        return info(material, name, lore);
+    }
+
+    private void renderFoundationShortcut(Inventory inventory, CityService.CityView city,
+                                          CityService.FoundationApplication foundation) {
+        renderFoundationShortcutAt(inventory, 23, city, foundation);
+    }
+
+    private void renderFoundationShortcutAt(Inventory inventory, int slot, CityService.CityView city,
+                                            CityService.FoundationApplication foundation) {
+        if (city != null) {
+            inventory.setItem(slot, disabled(Material.FILLED_MAP, "Основать город",
+                    "Вы уже состоите в городе «" + city.name() + "»"));
+        } else if (foundation != null && "PENDING".equals(foundation.status())) {
+            inventory.setItem(slot, info(Material.WRITABLE_BOOK, "Основание · " + foundation.name(),
+                    "Заявка ожидает решения администрации", "ID: " + foundation.slug(),
+                    "Подано: " + date(foundation.createdAt())));
+        } else {
+            String previous = foundation != null && "REJECTED".equals(foundation.status())
+                    ? "Предыдущая заявка была отклонена" : "Доступно игроку без гражданства";
+            inventory.setItem(slot, button(Material.FILLED_MAP, "Основать город", "prompt:city_foundation",
+                    "Подать заявку администрации", previous));
+        }
+    }
+
     private ItemStack button(Material material, String name, String action, String... lore) {
         ItemStack item = info(material, name, lore);
         item.editMeta(meta -> {
             List<Component> lines = new ArrayList<>(meta.lore() == null ? List.of() : meta.lore());
             lines.add(Component.empty());
-            lines.add(UiText.hint("ЛКМ  ›  выбрать"));
+            String hint = action.startsWith("route:") ? "ЛКМ  ›  открыть раздел"
+                    : action.startsWith("prompt:") ? "ЛКМ  ›  начать заполнение"
+                    : action.startsWith("command:") ? "ЛКМ  ›  выполнить"
+                    : "ЛКМ  ›  выбрать";
+            lines.add(UiText.hint(hint));
             meta.lore(lines);
             meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, action);
         });
@@ -833,9 +1161,9 @@ public final class GuiService {
 
     private Material statusMaterial(String status) {
         return switch (status) {
-            case "ACTIVE" -> Material.LIME_CONCRETE;
+            case "ACTIVE", "ACCEPTED", "APPROVED", "COMPLETED" -> Material.LIME_CONCRETE;
             case "PENDING", "WARNING", "EXPIRING" -> Material.YELLOW_CONCRETE;
-            case "REJECTED", "REVOKED", "BLOCKED", "CLOSED" -> Material.RED_CONCRETE;
+            case "REJECTED", "REVOKED", "BLOCKED", "CLOSED", "FAILED" -> Material.RED_CONCRETE;
             case "DEBT", "SUSPENDED", "CLOSING", "EXPIRED" -> Material.ORANGE_CONCRETE;
             default -> Material.BRICKS;
         };
@@ -854,6 +1182,9 @@ public final class GuiService {
             case "ACTIVE" -> "активно";
             case "PENDING" -> "ожидает решения";
             case "ACCEPTED" -> "принято";
+            case "APPROVED" -> "одобрено";
+            case "COMPLETED" -> "выполнено";
+            case "FAILED" -> "ошибка";
             case "REJECTED" -> "отклонено";
             case "WARNING" -> "требует внимания";
             case "DEBT" -> "есть задолженность";
@@ -870,7 +1201,7 @@ public final class GuiService {
 
     private String title(Player player, Route route) {
         return switch (route) {
-            case HOME -> "CityCore · Телефон";
+            case HOME -> "CityCore · Панель";
             case PROFILE -> "CityCore · Профиль";
             case CITY -> "CityCore · Город";
             case CITY_DIRECTORY -> "CityCore · Каталог городов";
@@ -882,7 +1213,12 @@ public final class GuiService {
             case BUSINESS_DETAIL -> "CityCore · Карточка предприятия";
             case LICENSES -> "CityCore · Лицензии";
             case ECONOMY -> "CityCore · Финансы";
-            case ADMIN -> "CityCore · Управление";
+            case MAYOR -> "CityCore · Мэрия";
+            case GOVERNMENT -> "CityCore · Госструктуры";
+            case ADMIN -> "CityCore · Администрирование";
+            case CITY_FOUNDATIONS_ADMIN -> "CityCore · Основание городов";
+            case CITY_FOUNDATION_DETAIL -> "CityCore · Заявка на город";
+            case EMISSION -> "CityCore · Эмиссия";
             case PLANNED -> "CityCore · " + selectedPlanned.getOrDefault(player.getUniqueId(), PLANNED.get("roadmap")).title();
             case CONFIRM -> "CityCore · Подтверждение";
         };
@@ -894,12 +1230,21 @@ public final class GuiService {
         return current.getMessage() == null ? current.getClass().getSimpleName() : current.getMessage();
     }
 
+    private String shorten(String value, int limit) {
+        if (value == null) return "—";
+        return value.length() <= limit ? value : value.substring(0, Math.max(1, limit - 1)) + "…";
+    }
+
     private record PlannedModule(Material material, String title, String phase, String description) {}
     private record Confirmation(String title, String description, String confirmLabel,
-                                Callable<String> operation, Runnable mainOperation, Route returnRoute) {}
+                                Callable<String> operation, Runnable mainOperation, Route returnRoute,
+                                String requiredPermission) {}
     private record ProfileData(CityService.CityView city, List<BusinessService.BusinessView> businesses) {}
-    private record CityScreenData(CityService.CityView city, List<CityService.PlayerApplication> applications) {}
+    private record HomeContext(CityService.CityView city, CityService.FoundationApplication foundation) {}
+    private record CityScreenData(CityService.CityView city, List<CityService.PlayerApplication> applications,
+                                  CityService.FoundationApplication foundation) {}
     private record MemberScreenData(CityService.CityView city, List<CityService.Member> members) {}
     private record BusinessScreenData(CityService.CityView city, List<BusinessService.BusinessView> items) {}
     private record EconomyScreenData(CityService.CityView city, List<BusinessService.BusinessView> businesses) {}
+    private record EmissionScreenData(List<CityService.CitySummary> cities, List<EmissionService.Issue> issues) {}
 }

@@ -31,6 +31,14 @@ public final class Migrations {
             "CREATE INDEX IF NOT EXISTS idx_license_business_status ON license(business_id,status)",
             "CREATE TABLE IF NOT EXISTS vault_transfer(id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, player_uuid TEXT NOT NULL, target_account TEXT NOT NULL, amount_minor INTEGER NOT NULL CHECK(amount_minor > 0), direction TEXT NOT NULL, state TEXT NOT NULL, vault_balance_before_minor INTEGER, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(target_account) REFERENCES account(id))",
             "CREATE INDEX IF NOT EXISTS idx_vault_transfer_state ON vault_transfer(state,updated_at)"
+    ), List.of(
+            "CREATE TABLE IF NOT EXISTS city_foundation_application(id TEXT PRIMARY KEY, founder_uuid TEXT NOT NULL, slug TEXT NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, decided_at TEXT, decided_by TEXT, decision_note TEXT, FOREIGN KEY(founder_uuid) REFERENCES player_profile(uuid))",
+            "CREATE INDEX IF NOT EXISTS idx_foundation_status_created ON city_foundation_application(status,created_at)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_foundation_pending_founder ON city_foundation_application(founder_uuid) WHERE status='PENDING'",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_foundation_pending_slug ON city_foundation_application(slug) WHERE status='PENDING'",
+            "CREATE TABLE IF NOT EXISTS monetary_issue(id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, actor_uuid TEXT NOT NULL, target_type TEXT NOT NULL, target_id TEXT NOT NULL, target_account TEXT NOT NULL, amount_minor INTEGER NOT NULL CHECK(amount_minor > 0), currency TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL, ledger_entry_id TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(target_account) REFERENCES account(id), FOREIGN KEY(ledger_entry_id) REFERENCES ledger_entry(id))",
+            "CREATE INDEX IF NOT EXISTS idx_monetary_issue_state ON monetary_issue(state,updated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_monetary_issue_target ON monetary_issue(target_type,target_id,created_at)"
     ));
 
     private Migrations() {}

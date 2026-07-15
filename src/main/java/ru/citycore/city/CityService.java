@@ -15,34 +15,112 @@ public final class CityService {
     private final Database database;
     public CityService(Database database) { this.database = database; }
 
-    public CreatedCity create(UUID founder, String rawSlug, String rawName) {
-        String slug = rawSlug.toLowerCase(Locale.ROOT).trim(); String name = rawName.trim();
-        if (!SLUG.matcher(slug).matches()) throw new IllegalArgumentException("ID города: 3–24 символа, a-z, 0-9, _ или -");
-        if (name.length() < 3 || name.length() > 32) throw new IllegalArgumentException("Название города: от 3 до 32 символов");
+    public FoundationApplication submitFoundation(UUID founder, String rawSlug, String rawName, String rawDescription) {
+        String slug = validateSlug(rawSlug);
+        String name = validateName(rawName);
+        String description = rawDescription == null ? "" : rawDescription.trim();
+        if (description.length() < 8 || description.length() > 180) {
+            throw new IllegalArgumentException("Описание города: от 8 до 180 символов");
+        }
         return database.transaction(connection -> {
-            try (var profile = connection.prepareStatement("SELECT 1 FROM player_profile WHERE uuid=?")) {
-                profile.setString(1, founder.toString());
-                try (var rs = profile.executeQuery()) { if (!rs.next()) throw new IllegalStateException("Профиль игрока ещё не создан"); }
+            ensureProfile(connection, founder);
+            if (membership(connection, founder) != null) throw new IllegalStateException("Игрок уже состоит в городе");
+            try (var city = connection.prepareStatement("SELECT 1 FROM city WHERE slug=?")) {
+                city.setString(1, slug);
+                try (var rs = city.executeQuery()) { if (rs.next()) throw new IllegalStateException("Город с таким ID уже существует"); }
             }
-            try (var citizenship = connection.prepareStatement("SELECT 1 FROM citizenship WHERE player_uuid=?")) {
-                citizenship.setString(1, founder.toString());
-                try (var rs = citizenship.executeQuery()) { if (rs.next()) throw new IllegalStateException("Игрок уже состоит в городе"); }
+            try (var pending = connection.prepareStatement("SELECT 1 FROM city_foundation_application WHERE founder_uuid=? AND status='PENDING'")) {
+                pending.setString(1, founder.toString());
+                try (var rs = pending.executeQuery()) { if (rs.next()) throw new IllegalStateException("У вас уже есть заявка на основании города"); }
             }
-            String id = UUID.randomUUID().toString(); String now = Instant.now().toString();
-            try (var city = connection.prepareStatement("INSERT INTO city(id,slug,name,founder_uuid,status,created_at) VALUES(?,?,?,?,?,?)")) {
-                city.setString(1, id); city.setString(2, slug); city.setString(3, name);
-                city.setString(4, founder.toString()); city.setString(5, "ACTIVE"); city.setString(6, now); city.executeUpdate();
+            try (var pending = connection.prepareStatement("SELECT 1 FROM city_foundation_application WHERE slug=? AND status='PENDING'")) {
+                pending.setString(1, slug);
+                try (var rs = pending.executeQuery()) { if (rs.next()) throw new IllegalStateException("Этот ID уже указан в другой заявке"); }
             }
-            try (var citizen = connection.prepareStatement("INSERT INTO citizenship(player_uuid,city_id,role,joined_at) VALUES(?,?,?,?)")) {
-                citizen.setString(1, founder.toString()); citizen.setString(2, id);
-                citizen.setString(3, CityRole.MAYOR.name()); citizen.setString(4, now); citizen.executeUpdate();
+            String id = UUID.randomUUID().toString();
+            Instant created = Instant.now();
+            try (var insert = connection.prepareStatement("INSERT INTO city_foundation_application(id,founder_uuid,slug,name,description,status,created_at) VALUES(?,?,?,?,?,'PENDING',?)")) {
+                insert.setString(1, id);
+                insert.setString(2, founder.toString());
+                insert.setString(3, slug);
+                insert.setString(4, name);
+                insert.setString(5, description);
+                insert.setString(6, created.toString());
+                insert.executeUpdate();
             }
-            String treasury = UUID.randomUUID().toString();
-            try (var account = connection.prepareStatement("INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,?,?,?,0,0)")) {
-                account.setString(1, treasury); account.setString(2, "CITY"); account.setString(3, id); account.setString(4, "ESSENTIALS"); account.executeUpdate();
+            AuditLog.append(connection, "CITY_FOUNDATION_SUBMITTED", founder, "CITY_FOUNDATION", id,
+                    "slug=" + slug + ";name=" + name);
+            return new FoundationApplication(id, founder, profileName(connection, founder), slug, name,
+                    description, "PENDING", created, null);
+        });
+    }
+
+    public FoundationApplication latestFoundation(UUID founder) {
+        return database.transaction(connection -> {
+            try (var query = connection.prepareStatement("""
+                    SELECT f.*,p.last_name FROM city_foundation_application f
+                    JOIN player_profile p ON p.uuid=f.founder_uuid
+                    WHERE f.founder_uuid=? ORDER BY f.created_at DESC LIMIT 1
+                    """)) {
+                query.setString(1, founder.toString());
+                try (var rs = query.executeQuery()) { return rs.next() ? readFoundation(rs) : null; }
             }
-            AuditLog.append(connection, "CITY_CREATED", founder, "CITY", id, "slug=" + slug + ";name=" + name);
-            return new CreatedCity(id, slug, name, treasury);
+        });
+    }
+
+    public List<FoundationApplication> pendingFoundations() {
+        return database.transaction(connection -> {
+            List<FoundationApplication> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT f.*,p.last_name FROM city_foundation_application f
+                    JOIN player_profile p ON p.uuid=f.founder_uuid
+                    WHERE f.status='PENDING' ORDER BY f.created_at
+                    """); var rs = query.executeQuery()) {
+                while (rs.next()) result.add(readFoundation(rs));
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public FoundationDecision decideFoundation(UUID actor, String applicationId, boolean approve, String rawNote) {
+        String note = rawNote == null ? "" : rawNote.trim();
+        if (note.length() > 180) throw new IllegalArgumentException("Комментарий решения: не более 180 символов");
+        return database.transaction(connection -> {
+            FoundationApplication application;
+            try (var query = connection.prepareStatement("""
+                    SELECT f.*,p.last_name FROM city_foundation_application f
+                    JOIN player_profile p ON p.uuid=f.founder_uuid WHERE f.id=? AND f.status='PENDING'
+                    """)) {
+                query.setString(1, applicationId);
+                try (var rs = query.executeQuery()) {
+                    if (!rs.next()) throw new IllegalArgumentException("Ожидающая заявка на город не найдена");
+                    application = readFoundation(rs);
+                }
+            }
+            CreatedCity city = null;
+            if (approve) {
+                if (membership(connection, application.founderId()) != null) {
+                    throw new IllegalStateException("Основатель уже вступил в другой город");
+                }
+                try (var existing = connection.prepareStatement("SELECT 1 FROM city WHERE slug=?")) {
+                    existing.setString(1, application.slug());
+                    try (var rs = existing.executeQuery()) { if (rs.next()) throw new IllegalStateException("ID города уже занят"); }
+                }
+                city = createApproved(connection, application.founderId(), application.slug(), application.name());
+            }
+            Instant decided = Instant.now();
+            try (var update = connection.prepareStatement("UPDATE city_foundation_application SET status=?,decided_at=?,decided_by=?,decision_note=? WHERE id=? AND status='PENDING'")) {
+                update.setString(1, approve ? "APPROVED" : "REJECTED");
+                update.setString(2, decided.toString());
+                update.setString(3, actor.toString());
+                update.setString(4, note);
+                update.setString(5, applicationId);
+                if (update.executeUpdate() != 1) throw new IllegalStateException("Заявка уже обработана");
+            }
+            AuditLog.append(connection, approve ? "CITY_FOUNDATION_APPROVED" : "CITY_FOUNDATION_REJECTED",
+                    actor, "CITY_FOUNDATION", applicationId,
+                    "founder=" + application.founderId() + ";slug=" + application.slug() + ";note=" + note);
+            return new FoundationDecision(approve, city, decided);
         });
     }
 
@@ -217,6 +295,73 @@ public final class CityService {
         });
     }
 
+    private CreatedCity createApproved(java.sql.Connection connection, UUID founder, String slug, String name) throws Exception {
+        String id = UUID.randomUUID().toString();
+        String now = Instant.now().toString();
+        try (var city = connection.prepareStatement("INSERT INTO city(id,slug,name,founder_uuid,status,created_at) VALUES(?,?,?,?,?,?)")) {
+            city.setString(1, id);
+            city.setString(2, slug);
+            city.setString(3, name);
+            city.setString(4, founder.toString());
+            city.setString(5, "ACTIVE");
+            city.setString(6, now);
+            city.executeUpdate();
+        }
+        try (var citizen = connection.prepareStatement("INSERT INTO citizenship(player_uuid,city_id,role,joined_at) VALUES(?,?,?,?)")) {
+            citizen.setString(1, founder.toString());
+            citizen.setString(2, id);
+            citizen.setString(3, CityRole.MAYOR.name());
+            citizen.setString(4, now);
+            citizen.executeUpdate();
+        }
+        String treasury = UUID.randomUUID().toString();
+        try (var account = connection.prepareStatement("INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,?,?,?,0,0)")) {
+            account.setString(1, treasury);
+            account.setString(2, "CITY");
+            account.setString(3, id);
+            account.setString(4, "ESSENTIALS");
+            account.executeUpdate();
+        }
+        AuditLog.append(connection, "CITY_CREATED", founder, "CITY", id, "slug=" + slug + ";name=" + name);
+        return new CreatedCity(id, slug, name, treasury);
+    }
+
+    private void ensureProfile(java.sql.Connection connection, UUID player) throws Exception {
+        try (var profile = connection.prepareStatement("SELECT 1 FROM player_profile WHERE uuid=?")) {
+            profile.setString(1, player.toString());
+            try (var rs = profile.executeQuery()) {
+                if (!rs.next()) throw new IllegalStateException("Профиль игрока ещё не создан");
+            }
+        }
+    }
+
+    private String profileName(java.sql.Connection connection, UUID player) throws Exception {
+        try (var profile = connection.prepareStatement("SELECT last_name FROM player_profile WHERE uuid=?")) {
+            profile.setString(1, player.toString());
+            try (var rs = profile.executeQuery()) { return rs.next() ? rs.getString(1) : player.toString(); }
+        }
+    }
+
+    private String validateSlug(String rawSlug) {
+        String slug = rawSlug == null ? "" : rawSlug.toLowerCase(Locale.ROOT).trim();
+        if (!SLUG.matcher(slug).matches()) throw new IllegalArgumentException("ID города: 3–24 символа, a-z, 0-9, _ или -");
+        return slug;
+    }
+
+    private String validateName(String rawName) {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.length() < 3 || name.length() > 32) throw new IllegalArgumentException("Название города: от 3 до 32 символов");
+        return name;
+    }
+
+    private FoundationApplication readFoundation(java.sql.ResultSet rs) throws Exception {
+        String decided = rs.getString("decided_at");
+        return new FoundationApplication(rs.getString("id"), UUID.fromString(rs.getString("founder_uuid")),
+                rs.getString("last_name"), rs.getString("slug"), rs.getString("name"),
+                rs.getString("description"), rs.getString("status"), Instant.parse(rs.getString("created_at")),
+                decided == null ? null : Instant.parse(decided));
+    }
+
     private Membership membership(java.sql.Connection connection, UUID player) throws Exception {
         try (var query = connection.prepareStatement("SELECT city_id,role FROM citizenship WHERE player_uuid=?")) {
             query.setString(1, player.toString()); try (var rs = query.executeQuery()) {
@@ -232,4 +377,8 @@ public final class CityService {
     public record PlayerApplication(String id, String citySlug, String cityName, String status, Instant createdAt) {}
     public record Member(UUID playerId, String playerName, CityRole role, Instant joinedAt) {}
     public record CityView(String id, String slug, String name, String status, CityRole role, long treasuryMinor) {}
+    public record FoundationApplication(String id, UUID founderId, String founderName, String slug,
+                                        String name, String description, String status,
+                                        Instant createdAt, Instant decidedAt) {}
+    public record FoundationDecision(boolean approved, CreatedCity city, Instant decidedAt) {}
 }
