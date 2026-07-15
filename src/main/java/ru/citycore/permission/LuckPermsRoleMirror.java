@@ -23,19 +23,10 @@ public final class LuckPermsRoleMirror implements RoleMirror {
     }
 
     public static RoleMirror create(CityCorePlugin plugin) {
-        if (!plugin.config().luckPermsEnabled()
-                || plugin.getServer().getPluginManager().getPlugin("LuckPerms") == null) {
-            return new DisabledRoleMirror();
-        }
-        try {
-            RoleMirror mirror = new LuckPermsRoleMirror(plugin, LuckPermsProvider.get(),
-                    plugin.config().luckPermsGroups());
-            plugin.getLogger().info("LuckPerms подключён как декоративное отражение ролей CityCore");
-            return mirror;
-        } catch (IllegalStateException unavailable) {
-            plugin.getLogger().warning("LuckPerms обнаружен, но его API недоступен: " + unavailable.getMessage());
-            return new DisabledRoleMirror();
-        }
+        RoleMirror mirror = new LuckPermsRoleMirror(plugin, LuckPermsProvider.get(),
+                plugin.config().luckPermsGroups());
+        plugin.getLogger().info("LuckPerms подключён как декоративное отражение ролей CityCore");
+        return mirror;
     }
 
     @Override public void sync(UUID playerId, CityRole role) {
@@ -55,9 +46,4 @@ public final class LuckPermsRoleMirror implements RoleMirror {
     }
 
     @Override public boolean available() { return true; }
-
-    private static final class DisabledRoleMirror implements RoleMirror {
-        @Override public void sync(UUID playerId, CityRole role) {}
-        @Override public boolean available() { return false; }
-    }
 }

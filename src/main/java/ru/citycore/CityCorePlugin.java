@@ -23,8 +23,8 @@ import ru.citycore.gui.GuiFeedback;
 import ru.citycore.gui.ChatPromptService;
 import ru.citycore.profile.ProfileListener;
 import ru.citycore.profile.ProfileRepository;
-import ru.citycore.permission.LuckPermsRoleMirror;
 import ru.citycore.permission.RoleMirror;
+import ru.citycore.permission.RoleMirrors;
 
 import java.io.File;
 import java.io.IOException;
@@ -63,7 +63,7 @@ public final class CityCorePlugin extends JavaPlugin {
                     businesses, new VaultTransferRepository(database), ledger, feedback);
             vaultTransfers.recoverIncomplete();
             ChatPromptService prompts = new ChatPromptService(this, feedback);
-            RoleMirror roleMirror = LuckPermsRoleMirror.create(this);
+            RoleMirror roleMirror = RoleMirrors.create(this);
             GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback,
                     vaultTransfers, emission, roleMirror);
             getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles, cities, roleMirror), this);

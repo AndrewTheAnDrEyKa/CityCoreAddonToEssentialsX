@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'ru.citycore'
-version = '0.1.0-alpha.17.0'
+version = '0.1.0-alpha.17.1'
 
 repositories {
     mavenCentral()
@@ -57,3 +57,19 @@ shadowJar {
 }
 
 tasks.build.dependsOn tasks.shadowJar
+
+tasks.register('verifyOptionalIntegrations') {
+    dependsOn tasks.shadowJar
+    doLast {
+        def jarFile = tasks.shadowJar.archiveFile.get().asFile
+        def roleMirrors = zipTree(jarFile).matching {
+            include 'ru/citycore/permission/RoleMirrors.class'
+        }.singleFile.bytes
+        def bytecode = new String(roleMirrors, java.nio.charset.StandardCharsets.ISO_8859_1)
+        if (bytecode.contains('net/luckperms/')) {
+            throw new GradleException('RoleMirrors must not link directly to LuckPerms API classes')
+        }
+    }
+}
+
+tasks.check.dependsOn tasks.verifyOptionalIntegrations
