@@ -60,8 +60,8 @@ public final class CityCorePlugin extends JavaPlugin {
             if (!databasePath.startsWith(dataDirectory)) {
                 throw new IllegalArgumentException("database.file должен находиться внутри папки CityCore");
             }
-            Path backup = DatabaseBackup.beforeAlpha21Hotfix(databasePath, dataDirectory.resolve("backups"));
-            if (backup != null) getLogger().info("Резервная копия перед Alpha 21.1: " + backup.getFileName());
+            Path backup = DatabaseBackup.beforeAlpha212(databasePath, dataDirectory.resolve("backups"));
+            if (backup != null) getLogger().info("Резервная копия перед Alpha 21.2: " + backup.getFileName());
             database = new Database(databasePath, config.poolSize());
             Migrations.apply(database);
             storage = new StorageExecutor();
@@ -94,7 +94,8 @@ public final class CityCorePlugin extends JavaPlugin {
             ControllerItems controllerItems = new ControllerItems(this);
             GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback,
                     vaultTransfers, emission, roleMirror, industry, controllerItems, communication);
-            getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles, cities, roleMirror, devices, navigatorItem), this);
+            getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles, cities,
+                    roleMirror, devices, navigatorItem, businesses), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
             getServer().getPluginManager().registerEvents(prompts, this);
             getServer().getPluginManager().registerEvents(new LocalChatListener(this, communication), this);
@@ -258,16 +259,22 @@ public final class CityCorePlugin extends JavaPlugin {
         }
         if (version < 8) {
             // Oil procurement and the 20% sales deduction are state-level and
-            // automatic in Alpha 21.1. The former mayor-controlled values are ignored.
+            // automatic since Alpha 21.1. The former mayor-controlled values are ignored.
             raw.set("industry.default-tax-bps", null);
             raw.set("industry.max-tax-bps", null);
         }
-        if (version >= 8) return;
-        raw.set("config-version", 8);
+        if (version < 9) {
+            raw.set("industry.automatic-deposit.radius", 25);
+            raw.set("industry.automatic-deposit.reserves.1", 15000L);
+            raw.set("industry.automatic-deposit.reserves.2", 15000L);
+            raw.set("industry.automatic-deposit.reserves.3", 25000L);
+        }
+        if (version >= 9) return;
+        raw.set("config-version", 9);
         try {
             raw.save(file);
         } catch (IOException error) {
-            throw new IllegalStateException("Не удалось обновить config.yml до версии 8", error);
+            throw new IllegalStateException("Не удалось обновить config.yml до версии 9", error);
         }
     }
     public CityCoreConfig config() { return config; }

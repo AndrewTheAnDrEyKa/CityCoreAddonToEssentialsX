@@ -16,7 +16,6 @@ import java.util.function.ToIntFunction;
 
 public final class BusinessService {
     private static final Pattern SLUG = Pattern.compile("[a-z0-9][a-z0-9_-]{2,23}");
-    private static final Pattern LICENSE_TYPE = Pattern.compile("[A-Z0-9_]{3,32}");
     private final Database database;
     private final ToIntFunction<String> minimumLicenseDays;
     public BusinessService(Database database) { this(database, ignored -> 1); }
@@ -105,6 +104,9 @@ public final class BusinessService {
             Authority authority = requireOfficial(connection, actor);
             BusinessRow business = business(connection, businessId);
             if (!business.cityId().equals(authority.cityId())) throw new SecurityException("Бизнес относится к другому городу");
+            if (business.ownerId().equals(actor)) {
+                throw new SecurityException("Нельзя рассматривать собственную заявку на предприятие");
+            }
             if (!"PENDING".equals(business.status())) throw new IllegalStateException("Заявка уже рассмотрена");
             String now = Instant.now().toString(); String status = approve ? "ACTIVE" : "REJECTED";
             try (var update = connection.prepareStatement("UPDATE business SET status=?,decided_at=?,decided_by=? WHERE id=? AND status='PENDING'")) {
@@ -120,21 +122,23 @@ public final class BusinessService {
     }
 
     public LicenseView issueLicense(UUID actor, String businessId, String rawType, int days) {
-        String type = normalizeLicenseType(rawType);
-        if (!LICENSE_TYPE.matcher(type).matches()) throw new IllegalArgumentException("Тип лицензии: 3–32 символа, A-Z, 0-9 или _");
+        BusinessLicenseType license = BusinessLicenseType.parse(normalizeLicenseType(rawType));
+        String type = license.code();
         int minimum = Math.max(1, minimumLicenseDays.applyAsInt(type));
-        if (days < minimum || days > 3650) throw new IllegalArgumentException("Срок лицензии " + type + ": от " + minimum + " до 3650 дней");
+        if (days < minimum || days > 3650) throw new IllegalArgumentException("Срок разрешения «" + license.displayName() + "»: от " + minimum + " до 3650 дней");
         return database.transaction(connection -> {
             Authority authority = requireOfficial(connection, actor); BusinessRow business = business(connection, businessId);
             if (!business.cityId().equals(authority.cityId())) throw new SecurityException("Бизнес относится к другому городу");
+            if (business.ownerId().equals(actor)) throw new SecurityException("Нельзя выдавать лицензию собственному предприятию");
             if (!"ACTIVE".equals(business.status())) throw new IllegalStateException("Лицензировать можно только активный бизнес");
+            validateLicenseApplicability(connection, business, license);
             String id = UUID.randomUUID().toString(); Instant issued = Instant.now(); Instant expires = issued.plus(days, ChronoUnit.DAYS);
-            try (var license = connection.prepareStatement("""
+            try (var insertLicense = connection.prepareStatement("""
                     INSERT INTO license(id,business_id,license_type,status,issued_at,expires_at,issued_by) VALUES(?,?,?,'ACTIVE',?,?,?)
                     ON CONFLICT(business_id,license_type) DO UPDATE SET id=excluded.id,status='ACTIVE',issued_at=excluded.issued_at,expires_at=excluded.expires_at,issued_by=excluded.issued_by,revoked_at=NULL,revoked_by=NULL
                     """)) {
-                license.setString(1, id); license.setString(2, businessId); license.setString(3, type);
-                license.setString(4, issued.toString()); license.setString(5, expires.toString()); license.setString(6, actor.toString()); license.executeUpdate();
+                insertLicense.setString(1, id); insertLicense.setString(2, businessId); insertLicense.setString(3, type);
+                insertLicense.setString(4, issued.toString()); insertLicense.setString(5, expires.toString()); insertLicense.setString(6, actor.toString()); insertLicense.executeUpdate();
             }
             AuditLog.append(connection, "LICENSE_ISSUED", actor, "BUSINESS", businessId, "type=" + type + ";expires=" + expires);
             return new LicenseView(id, businessId, type, "ACTIVE", issued, expires);
@@ -142,10 +146,11 @@ public final class BusinessService {
     }
 
     public void revokeLicense(UUID actor, String businessId, String rawType) {
-        String type = normalizeLicenseType(rawType);
+        String type = BusinessLicenseType.parse(normalizeLicenseType(rawType)).code();
         database.transaction(connection -> {
             Authority authority = requireOfficial(connection, actor); BusinessRow business = business(connection, businessId);
             if (!business.cityId().equals(authority.cityId())) throw new SecurityException("Бизнес относится к другому городу");
+            if (business.ownerId().equals(actor)) throw new SecurityException("Нельзя отзывать лицензию собственного предприятия");
             try (var update = connection.prepareStatement("UPDATE license SET status='REVOKED',revoked_at=?,revoked_by=? WHERE business_id=? AND license_type=? AND status='ACTIVE'")) {
                 update.setString(1, Instant.now().toString()); update.setString(2, actor.toString()); update.setString(3, businessId); update.setString(4, type);
                 if (update.executeUpdate() != 1) throw new IllegalArgumentException("Активная лицензия не найдена");
@@ -162,18 +167,57 @@ public final class BusinessService {
             if (pendingOnly && !official) throw new SecurityException("Очередь регистраций доступна мэру и чиновникам");
             String sql;
             if (pendingOnly) {
-                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=? AND b.status='PENDING' ORDER BY b.created_at";
+                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=? AND b.status='PENDING' AND b.owner_uuid<>? ORDER BY b.created_at";
             } else if (official) {
-                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=? ORDER BY b.created_at";
+                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.city_id=? AND b.status='ACTIVE' ORDER BY b.created_at";
             } else {
-                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.owner_uuid=? ORDER BY b.created_at";
+                sql = "SELECT b.*,a.id account_id FROM business b LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id WHERE b.owner_uuid=? AND b.status='ACTIVE' ORDER BY b.created_at";
             }
             List<BusinessView> result = new ArrayList<>();
             try (var query = connection.prepareStatement(sql)) {
                 query.setString(1, pendingOnly || official ? membership.cityId() : actor.toString());
+                if (pendingOnly) query.setString(2, actor.toString());
                 try (var rs = query.executeQuery()) {
                     while (rs.next()) result.add(readBusinessView(rs));
                 }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public List<BusinessView> applications(UUID owner) {
+        return database.transaction(connection -> {
+            List<BusinessView> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT b.*,a.id account_id FROM business b
+                    LEFT JOIN account a ON a.owner_type='BUSINESS' AND a.owner_id=b.id
+                    WHERE b.owner_uuid=? AND b.status<>'ACTIVE'
+                    ORDER BY CASE b.status WHEN 'PENDING' THEN 0 ELSE 1 END,b.created_at DESC
+                    """)) {
+                query.setString(1, owner.toString());
+                try (var rs = query.executeQuery()) { while (rs.next()) result.add(readBusinessView(rs)); }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public List<BusinessLicenseType> availableLicenses(UUID actor, String businessId) {
+        return database.transaction(connection -> {
+            Authority authority = requireOfficial(connection, actor);
+            BusinessRow business = business(connection, businessId);
+            if (!business.cityId().equals(authority.cityId())) throw new SecurityException("Бизнес относится к другому городу");
+            if (!"ACTIVE".equals(business.status())) return List.of();
+            if (business.activity() == BusinessActivity.TRADE) return List.of(BusinessLicenseType.TRADE);
+            if (business.activity() != BusinessActivity.OIL_EXTRACTION) return List.of();
+            List<BusinessLicenseType> result = new ArrayList<>();
+            try (var query = connection.prepareStatement("""
+                    SELECT DISTINCT level FROM industrial_object
+                    WHERE business_id=? AND level IS NOT NULL
+                      AND status NOT IN ('DRAFT','PENDING_INSPECTION','REJECTED','CANCELLED','DECOMMISSIONED','DEPLETED')
+                    ORDER BY level
+                    """)) {
+                query.setString(1, businessId);
+                try (var rs = query.executeQuery()) { while (rs.next()) result.add(BusinessLicenseType.oil(rs.getInt(1))); }
             }
             return List.copyOf(result);
         });
@@ -184,8 +228,9 @@ public final class BusinessService {
             Authority authority = authority(connection, actor);
             if (authority == null || (authority.role() != CityRole.MAYOR && authority.role() != CityRole.OFFICIAL)) return 0;
             try (var query = connection.prepareStatement(
-                    "SELECT COUNT(*) FROM business WHERE city_id=? AND status='PENDING' AND review_required=1")) {
+                    "SELECT COUNT(*) FROM business WHERE city_id=? AND status='PENDING' AND review_required=1 AND owner_uuid<>?")) {
                 query.setString(1, authority.cityId());
+                query.setString(2, actor.toString());
                 try (var rs = query.executeQuery()) { return rs.next() ? rs.getInt(1) : 0; }
             }
         });
@@ -329,9 +374,30 @@ public final class BusinessService {
         }
     }
     private BusinessRow business(java.sql.Connection connection, String id) throws Exception {
-        try (var query = connection.prepareStatement("SELECT city_id,status FROM business WHERE id=?")) {
+        try (var query = connection.prepareStatement("SELECT id,city_id,owner_uuid,status,activity_type FROM business WHERE id=?")) {
             query.setString(1, id); try (var rs = query.executeQuery()) {
-                if (!rs.next()) throw new IllegalArgumentException("Бизнес не найден"); return new BusinessRow(rs.getString(1), rs.getString(2));
+                if (!rs.next()) throw new IllegalArgumentException("Бизнес не найден");
+                return new BusinessRow(rs.getString(1), rs.getString(2), UUID.fromString(rs.getString(3)),
+                        rs.getString(4), BusinessActivity.parse(rs.getString(5)));
+            }
+        }
+    }
+
+    private void validateLicenseApplicability(java.sql.Connection connection, BusinessRow business,
+                                              BusinessLicenseType license) throws Exception {
+        if (business.activity() != license.activity()) {
+            throw new IllegalStateException("Разрешение «" + license.displayName() + "» не соответствует направлению предприятия");
+        }
+        if (license.oilLevel() == null) return;
+        try (var query = connection.prepareStatement("""
+                SELECT 1 FROM industrial_object
+                WHERE business_id=? AND level=?
+                  AND status NOT IN ('DRAFT','PENDING_INSPECTION','REJECTED','CANCELLED','DECOMMISSIONED','DEPLETED')
+                LIMIT 1
+                """)) {
+            query.setString(1, business.id()); query.setInt(2, license.oilLevel());
+            try (var rs = query.executeQuery()) {
+                if (!rs.next()) throw new IllegalStateException("Сначала объект должен пройти инспекцию на соответствующий уровень");
             }
         }
     }
@@ -344,7 +410,7 @@ public final class BusinessService {
         return normalized;
     }
     private record Authority(String cityId, CityRole role) {}
-    private record BusinessRow(String cityId, String status) {}
+    private record BusinessRow(String id, String cityId, UUID ownerId, String status, BusinessActivity activity) {}
     public record BusinessView(String id, String cityId, UUID ownerId, String slug, String name, String status,
                                String activityType, String accountId, Integer requestedIndustryLevel,
                                String applicationNote, boolean reviewRequired) {}

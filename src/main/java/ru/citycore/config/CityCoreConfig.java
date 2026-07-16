@@ -136,10 +136,17 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
         );
         long debtThreshold = money(config, "industry.debt-suspend-threshold", "1000.00", scale);
         if (debtThreshold <= 0) throw new IllegalArgumentException("industry.debt-suspend-threshold должен быть положительным");
+        int automaticRadius = Math.max(1, Math.min(128, config.getInt("industry.automatic-deposit.radius", 25)));
+        Map<Integer, Long> automaticReserves = Map.of(
+                1, Math.max(1L, config.getLong("industry.automatic-deposit.reserves.1", 15_000L)),
+                2, Math.max(1L, config.getLong("industry.automatic-deposit.reserves.2", 15_000L)),
+                3, Math.max(1L, config.getLong("industry.automatic-deposit.reserves.3", 25_000L))
+        );
         return new IndustrySettings(
                 config.getBoolean("industry.enabled", true), cycleSeconds, maxCatchUp,
                 money(config, "industry.default-lease", "20.00", scale),
                 debtThreshold,
+                automaticRadius, automaticReserves,
                 material, levels
         );
     }

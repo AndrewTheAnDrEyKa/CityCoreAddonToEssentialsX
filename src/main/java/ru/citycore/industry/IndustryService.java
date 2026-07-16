@@ -85,6 +85,13 @@ public final class IndustryService {
         return database.transaction(connection -> {
             BusinessRow business = requireBusinessOwner(connection, owner, businessId);
             requireOilBusiness(business);
+            try (var existing = connection.prepareStatement(
+                    "SELECT 1 FROM industrial_controller WHERE business_id=? AND state IN ('ISSUED','PLACED','BOUND') LIMIT 1")) {
+                existing.setString(1, businessId);
+                try (var rs = existing.executeQuery()) {
+                    if (rs.next()) throw new IllegalStateException("У предприятия уже есть нефтяной контроллер");
+                }
+            }
             String serial = "OIL-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase(Locale.ROOT);
             Instant now = Instant.now();
             try (var insert = connection.prepareStatement("INSERT INTO industrial_controller(serial,business_id,issued_to_uuid,state,issued_at) VALUES(?,?,?,'ISSUED',?)")) {
@@ -110,6 +117,7 @@ public final class IndustryService {
             if (controller.worldId() != null && !sameLocation(controller, worldId, x, y, z)) {
                 throw new IllegalStateException("Этот серийный номер уже размещён в другом месте");
             }
+            if (controller.objectId() != null) requireOriginalObjectLocation(connection, controller.objectId(), worldId, x, y, z);
             Instant now = Instant.now();
             try (var occupied = connection.prepareStatement("SELECT serial FROM industrial_controller WHERE world_uuid=? AND x=? AND y=? AND z=? AND state IN ('PLACED','BOUND') AND serial<>?")) {
                 occupied.setString(1, worldId.toString()); occupied.setInt(2, x); occupied.setInt(3, y); occupied.setInt(4, z); occupied.setString(5, serial);
@@ -120,10 +128,30 @@ public final class IndustryService {
                 update.setInt(4, y); update.setInt(5, z); update.setString(6, now.toString()); update.setString(7, serial);
                 if (update.executeUpdate() != 1) throw new IllegalStateException("Контроллер уже изменён");
             }
+            String objectId = controller.objectId();
+            String resultingState = "PLACED";
+            if (objectId == null) {
+                objectId = provisionAutomaticObject(connection, actor, business, serial, worldId, worldName, x, y, z, now);
+                resultingState = "BOUND";
+            } else {
+                try (var bind = connection.prepareStatement("UPDATE industrial_controller SET state='BOUND' WHERE serial=? AND state='PLACED'")) {
+                    bind.setString(1, serial);
+                    if (bind.executeUpdate() != 1) throw new IllegalStateException("Контроллер не удалось восстановить");
+                }
+                try (var restore = connection.prepareStatement("""
+                        UPDATE industrial_object
+                        SET status=CASE WHEN level IS NULL THEN 'PENDING_INSPECTION' ELSE 'PAUSED' END,
+                            last_error='',updated_at=?
+                        WHERE id=? AND status='MISSING_CONTROLLER'
+                        """)) {
+                    restore.setString(1, now.toString()); restore.setString(2, objectId); restore.executeUpdate();
+                }
+                resultingState = "BOUND";
+            }
             AuditLog.append(connection, "INDUSTRIAL_CONTROLLER_PLACED", actor, "INDUSTRIAL_CONTROLLER", serial,
-                    "world=" + worldName + ";x=" + x + ";y=" + y + ";z=" + z);
-            return new ControllerView(serial, controller.businessId(), controller.businessName(), actor, "PLACED",
-                    controller.issuedAt(), worldId, worldName, x, y, z, controller.objectId());
+                    "world=" + worldName + ";x=" + x + ";y=" + y + ";z=" + z + ";object=" + objectId);
+            return new ControllerView(serial, controller.businessId(), controller.businessName(), actor, resultingState,
+                    controller.issuedAt(), worldId, worldName, x, y, z, objectId);
         });
     }
 
@@ -132,19 +160,22 @@ public final class IndustryService {
             ControllerView controller = controller(connection, serial);
             if (!administrator) requireBusinessOwner(connection, actor, controller.businessId());
             Instant now = Instant.now();
+            boolean terminalObject = false;
             if (controller.objectId() != null) {
+                terminalObject = isTerminal(objectRow(connection, controller.objectId()).status());
                 try (var object = connection.prepareStatement("UPDATE industrial_object SET status='MISSING_CONTROLLER',last_error='Контроллер снят или разрушен',updated_at=? WHERE id=? AND status NOT IN ('DECOMMISSIONED','REJECTED','CANCELLED')")) {
                     object.setString(1, now.toString()); object.setString(2, controller.objectId()); object.executeUpdate();
                 }
             }
-            try (var update = connection.prepareStatement("UPDATE industrial_controller SET state='ISSUED',world_uuid=NULL,world_name=NULL,x=NULL,y=NULL,z=NULL,placed_at=NULL WHERE serial=? AND state IN ('PLACED','BOUND')")) {
-                update.setString(1, serial);
+            String nextState = terminalObject ? "RETIRED" : "ISSUED";
+            try (var update = connection.prepareStatement("UPDATE industrial_controller SET state=?,world_uuid=NULL,world_name=NULL,x=NULL,y=NULL,z=NULL,placed_at=NULL WHERE serial=? AND state IN ('PLACED','BOUND')")) {
+                update.setString(1, nextState); update.setString(2, serial);
                 if (update.executeUpdate() != 1) throw new IllegalStateException("Контроллер уже снят или недоступен");
             }
             AuditLog.append(connection, "INDUSTRIAL_CONTROLLER_REMOVED", actor, "INDUSTRIAL_CONTROLLER", serial,
                     "object=" + (controller.objectId() == null ? "" : controller.objectId()));
             return new ControllerView(serial, controller.businessId(), controller.businessName(), controller.issuedTo(),
-                    "ISSUED", controller.issuedAt(), null, null, null, null, null, controller.objectId());
+                    nextState, controller.issuedAt(), null, null, null, null, null, controller.objectId());
         });
     }
 
@@ -178,7 +209,7 @@ public final class IndustryService {
             List<ControllerView> result = new ArrayList<>();
             try (var query = connection.prepareStatement("""
                     SELECT c.*,b.name business_name FROM industrial_controller c JOIN business b ON b.id=c.business_id
-                    WHERE c.business_id=? ORDER BY c.issued_at DESC
+                    WHERE c.business_id=? AND c.state<>'RETIRED' ORDER BY c.issued_at DESC
                     """)) {
                 query.setString(1, businessId);
                 try (var rs = query.executeQuery()) { while (rs.next()) result.add(readController(rs)); }
@@ -197,6 +228,19 @@ public final class IndustryService {
             if (!administrator && !business.ownerId().equals(actor) && !official) {
                 throw new SecurityException("Нет доступа к контроллеру этого предприятия");
             }
+            return value;
+        });
+    }
+
+    public ControllerView recoverIssuedController(UUID owner, String serial) {
+        return database.transaction(connection -> {
+            ControllerView value = controller(connection, serial);
+            requireBusinessOwner(connection, owner, value.businessId());
+            if (!"ISSUED".equals(value.state()) || value.worldId() != null) {
+                throw new IllegalStateException("Восстановить предмет можно только для неразмещённого контроллера");
+            }
+            AuditLog.append(connection, "INDUSTRIAL_CONTROLLER_ITEM_RECOVERED", owner,
+                    "INDUSTRIAL_CONTROLLER", serial, "sameSerial=true");
             return value;
         });
     }
@@ -310,6 +354,9 @@ public final class IndustryService {
             ObjectRow row = objectRow(connection, objectId);
             BusinessRow business = business(connection, row.businessId());
             if (!administrator) requireOfficial(connection, actor, business.cityId());
+            if (!administrator && business.ownerId().equals(actor)) {
+                throw new SecurityException("Нельзя проводить осмотр собственного промышленного объекта");
+            }
             if (!"PENDING_INSPECTION".equals(row.status())) throw new IllegalStateException("Объект уже проверен или отозван");
             Instant now = Instant.now();
             String status = approve ? "PAUSED" : "REJECTED";
@@ -329,6 +376,8 @@ public final class IndustryService {
                 try (var releaseController = connection.prepareStatement("UPDATE industrial_controller SET state='PLACED' WHERE serial=? AND state='BOUND'")) {
                     releaseController.setString(1, row.controllerSerial()); releaseController.executeUpdate();
                 }
+            } else {
+                resizeAutomaticDeposit(connection, row.depositId(), level, now);
             }
             AuditLog.append(connection, approve ? "INDUSTRIAL_OBJECT_APPROVED" : "INDUSTRIAL_OBJECT_REJECTED",
                     actor, "INDUSTRIAL_OBJECT", objectId, "level=" + (approve ? level : 0) + ";note=" + note);
@@ -416,10 +465,13 @@ public final class IndustryService {
                 throw new SecurityException("Требуется должность городского инспектора");
             }
             String sql = "SELECT o.id FROM industrial_object o JOIN business b ON b.id=o.business_id WHERE o.status='PENDING_INSPECTION'"
-                    + (administrator ? "" : " AND b.city_id=?") + " ORDER BY o.submitted_at";
+                    + (administrator ? "" : " AND b.city_id=? AND b.owner_uuid<>?") + " ORDER BY o.submitted_at";
             List<ObjectView> result = new ArrayList<>();
             try (var query = connection.prepareStatement(sql)) {
-                if (!administrator) query.setString(1, authority.cityId());
+                if (!administrator) {
+                    query.setString(1, authority.cityId());
+                    query.setString(2, actor.toString());
+                }
                 try (var rs = query.executeQuery()) { while (rs.next()) result.add(object(connection, actor, rs.getString(1), administrator)); }
             }
             return List.copyOf(result);
@@ -701,6 +753,101 @@ public final class IndustryService {
         }
     }
 
+    private String provisionAutomaticObject(Connection connection, UUID actor, BusinessRow business, String serial,
+                                            UUID worldId, String worldName, int x, int y, int z,
+                                            Instant now) throws Exception {
+        int requestedLevel = business.requestedLevel() == null ? 1 : business.requestedLevel();
+        IndustrySettings cfg = settings.get();
+        int radius = cfg.automaticDepositRadius();
+        ensureAutomaticSpace(connection, worldId, x, z, radius);
+        long reserve = cfg.automaticReserve(requestedLevel);
+        long throughput = cfg.level(requestedLevel).unitsPerCycle();
+        String depositId = UUID.randomUUID().toString();
+        String suffix = serial.substring(Math.max(0, serial.length() - 6));
+        String slug = "oil_" + serial.toLowerCase(Locale.ROOT).replace("oil-", "");
+        try (var insert = connection.prepareStatement("""
+                INSERT INTO resource_deposit(id,slug,name,city_id,world_uuid,world_name,x,y,z,radius,
+                    reserve_total,reserve_remaining,throughput_limit,status,created_by,created_at,updated_at,source_type)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,'CONTROLLER_AUTO')
+                """)) {
+            insert.setString(1, depositId); insert.setString(2, slug); insert.setString(3, "Нефтяной участок " + suffix);
+            insert.setString(4, business.cityId()); insert.setString(5, worldId.toString()); insert.setString(6, worldName);
+            insert.setInt(7, x); insert.setInt(8, y); insert.setInt(9, z); insert.setInt(10, radius);
+            insert.setLong(11, reserve); insert.setLong(12, reserve); insert.setLong(13, throughput);
+            insert.setString(14, actor.toString()); insert.setString(15, now.toString()); insert.setString(16, now.toString());
+            insert.executeUpdate();
+        }
+        ensurePlot(connection, depositId, business.id(), actor);
+        String objectId = UUID.randomUUID().toString();
+        try (var insert = connection.prepareStatement("""
+                INSERT INTO industrial_object(id,business_id,deposit_id,controller_serial,status,inspection_note,
+                    submitted_at,last_error,updated_at)
+                VALUES(?,?,?,?,'PENDING_INSPECTION','Автоматический участок контроллера',?,'',?)
+                """)) {
+            insert.setString(1, objectId); insert.setString(2, business.id()); insert.setString(3, depositId);
+            insert.setString(4, serial); insert.setString(5, now.toString()); insert.setString(6, now.toString());
+            insert.executeUpdate();
+        }
+        try (var bind = connection.prepareStatement("UPDATE industrial_controller SET state='BOUND',object_id=? WHERE serial=? AND state='PLACED'")) {
+            bind.setString(1, objectId); bind.setString(2, serial);
+            if (bind.executeUpdate() != 1) throw new IllegalStateException("Контроллер не удалось связать с объектом");
+        }
+        AuditLog.append(connection, "AUTOMATIC_OIL_SITE_CREATED", actor, "INDUSTRIAL_OBJECT", objectId,
+                "business=" + business.id() + ";deposit=" + depositId + ";radius=" + radius
+                        + ";reserve=" + reserve + ";requestedLevel=" + requestedLevel);
+        return objectId;
+    }
+
+    private void ensureAutomaticSpace(Connection connection, UUID worldId, int x, int z, int radius) throws Exception {
+        try (var query = connection.prepareStatement("SELECT x,z,radius,name FROM resource_deposit WHERE world_uuid=? AND source_type='CONTROLLER_AUTO'")) {
+            query.setString(1, worldId.toString());
+            try (var rs = query.executeQuery()) {
+                while (rs.next()) {
+                    long dx = (long) x - rs.getInt("x"); long dz = (long) z - rs.getInt("z");
+                    long minimum = (long) radius + rs.getInt("radius");
+                    if (dx * dx + dz * dz < minimum * minimum) {
+                        throw new IllegalStateException("Слишком близко к участку «" + rs.getString("name")
+                                + "». Между центрами требуется не менее " + minimum + " блоков");
+                    }
+                }
+            }
+        }
+    }
+
+    private void requireOriginalObjectLocation(Connection connection, String objectId, UUID worldId,
+                                               int x, int y, int z) throws Exception {
+        try (var query = connection.prepareStatement("""
+                SELECT o.status,d.world_uuid,d.x,d.y,d.z FROM industrial_object o
+                JOIN resource_deposit d ON d.id=o.deposit_id WHERE o.id=?
+                """)) {
+            query.setString(1, objectId);
+            try (var rs = query.executeQuery()) {
+                if (!rs.next()) throw new IllegalStateException("Связанный нефтяной объект не найден");
+                if ("DECOMMISSIONED".equals(rs.getString("status")) || "DEPLETED".equals(rs.getString("status"))) {
+                    throw new IllegalStateException("Завершённый нефтяной объект нельзя восстановить");
+                }
+                if (!worldId.toString().equals(rs.getString("world_uuid")) || x != rs.getInt("x")
+                        || y != rs.getInt("y") || z != rs.getInt("z")) {
+                    throw new IllegalStateException("Связанный контроллер нужно вернуть в исходную точку участка");
+                }
+            }
+        }
+    }
+
+    private void resizeAutomaticDeposit(Connection connection, String depositId, int level, Instant now) throws Exception {
+        IndustrySettings cfg = settings.get();
+        try (var update = connection.prepareStatement("""
+                UPDATE resource_deposit
+                SET reserve_total=?,reserve_remaining=?,throughput_limit=?,updated_at=?
+                WHERE id=? AND source_type='CONTROLLER_AUTO' AND reserve_remaining=reserve_total
+                """)) {
+            long reserve = cfg.automaticReserve(level);
+            update.setLong(1, reserve); update.setLong(2, reserve);
+            update.setLong(3, cfg.level(level).unitsPerCycle()); update.setString(4, now.toString());
+            update.setString(5, depositId); update.executeUpdate();
+        }
+    }
+
     private void releasePlotIfUnused(Connection connection, String depositId, String businessId,
                                      String excludedObject, Instant now) throws Exception {
         try (var query = connection.prepareStatement("SELECT 1 FROM industrial_object WHERE deposit_id=? AND business_id=? AND id<>? AND status NOT IN ('DECOMMISSIONED','REJECTED','CANCELLED') LIMIT 1")) {
@@ -748,11 +895,12 @@ public final class IndustryService {
     }
 
     private BusinessRow business(Connection connection, String id) throws Exception {
-        try (var query = connection.prepareStatement("SELECT id,city_id,owner_uuid,name,status,activity_type FROM business WHERE id=?")) {
+        try (var query = connection.prepareStatement("SELECT id,city_id,owner_uuid,name,status,activity_type,requested_industry_level FROM business WHERE id=?")) {
             query.setString(1, id); try (var rs = query.executeQuery()) {
                 if (!rs.next()) throw new IllegalArgumentException("Предприятие не найдено");
                 return new BusinessRow(rs.getString(1), rs.getString(2), UUID.fromString(rs.getString(3)),
-                        rs.getString(4), rs.getString(5), rs.getString(6));
+                        rs.getString(4), rs.getString(5), rs.getString(6),
+                        rs.getObject(7) == null ? null : rs.getInt(7));
             }
         }
     }
@@ -846,7 +994,8 @@ public final class IndustryService {
     }
 
     private record Authority(String cityId, CityRole role) {}
-    private record BusinessRow(String id, String cityId, UUID ownerId, String name, String status, String activityType) {}
+    private record BusinessRow(String id, String cityId, UUID ownerId, String name, String status,
+                               String activityType, Integer requestedLevel) {}
     private record ObjectRow(String id, String businessId, String depositId, String controllerSerial,
                              Integer level, String status, Instant nextCycleAt, long debtMinor) {}
     private record DepositRow(String id, String cityId, long remaining, long throughput, String status) {}

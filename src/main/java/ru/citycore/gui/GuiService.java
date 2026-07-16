@@ -12,6 +12,7 @@ import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.persistence.PersistentDataType;
 import ru.citycore.CityCorePlugin;
 import ru.citycore.business.BusinessActivity;
+import ru.citycore.business.BusinessLicenseType;
 import ru.citycore.business.BusinessService;
 import ru.citycore.city.CityRole;
 import ru.citycore.city.CityService;
@@ -162,7 +163,7 @@ public final class GuiService {
             route = Route.HOME;
         }
         if (route == Route.INDUSTRY_DEPOSITS || route == Route.INDUSTRY_DEPOSIT_PICK) {
-            UiText.info(player, "Ручные месторождения убраны. Автоматические нефтяные участки появятся в следующей версии.");
+            UiText.info(player, "Ручные месторождения удалены. Новый нефтяной участок создаётся самим контроллером при установке.");
             route = route == Route.INDUSTRY_DEPOSIT_PICK ? Route.INDUSTRY_CONTROLLER : Route.ADMIN;
         }
         if ((route == Route.MAYOR_RESIGNATIONS_ADMIN || route == Route.MAYOR_VACANCIES_ADMIN
@@ -193,6 +194,7 @@ public final class GuiService {
             case CITY_APPLICATION_DETAIL -> renderCityApplication(player, inventory);
             case CITY_MEMBERS -> renderCityMembers(player, inventory);
             case BUSINESS -> renderBusinesses(player, inventory, false);
+            case BUSINESS_APPLICATIONS -> renderBusinessApplications(player, inventory);
             case BUSINESS_ACTIVITY -> renderBusinessActivities(player, inventory);
             case BUSINESS_OIL_LEVEL -> renderOilBusinessLevel(player, inventory);
             case BUSINESS_PENDING -> renderBusinesses(player, inventory, true);
@@ -466,7 +468,8 @@ public final class GuiService {
     private void renderBusinesses(Player player, Inventory inventory, boolean pendingOnly) {
         inventory.setItem(22, loading(pendingOnly ? "Загрузка регистраций…" : "Загрузка предприятий…"));
         storage.submit(() -> new BusinessScreenData(cities.view(player.getUniqueId()),
-                        businesses.list(player.getUniqueId(), pendingOnly)))
+                        businesses.list(player.getUniqueId(), pendingOnly),
+                        pendingOnly || privilegedWorkspace(player) ? List.of() : businesses.applications(player.getUniqueId())))
                 .whenComplete((data, error) -> sync(player, inventory, () -> {
                     clearList(inventory);
                     if (error != null) {
@@ -493,14 +496,43 @@ public final class GuiService {
                             "Очередь обработана", "Новых регистраций сейчас нет"));
                     if (!pendingOnly) {
                         if (!officialWorkspace) {
-                            ItemStack primary = data.city() == null
+                            List<ItemStack> personalActions = new ArrayList<>();
+                            personalActions.add(data.city() == null
                                     ? button(GuiIcon.CITY, "Сначала выберите город", "route:CITY",
                                     "Регистрация предприятия требует городской юрисдикции")
                                     : button(GuiIcon.REGISTRATION, "Создать предприятие", "prompt:business_register",
-                                    "Подать заявку на регистрацию в городе " + data.city().name());
-                            putCentered(inventory, 4, List.of(primary));
+                                    "Подать заявку на регистрацию в городе " + data.city().name()));
+                            if (!data.applications().isEmpty()) {
+                                long pending = data.applications().stream().filter(item -> "PENDING".equals(item.status())).count();
+                                personalActions.add(button(GuiIcon.APPLICATION,
+                                        pending > 0 ? "Мои заявки · ожидают " + pending : "История заявок",
+                                        "route:BUSINESS_APPLICATIONS",
+                                        "Регистрации отделены от действующих предприятий"));
+                            }
+                            putCentered(inventory, 4, personalActions);
                         }
                     }
+                }));
+    }
+
+    private void renderBusinessApplications(Player player, Inventory inventory) {
+        inventory.setItem(22, loading("Загрузка ваших заявок…"));
+        storage.submit(() -> businesses.applications(player.getUniqueId()))
+                .whenComplete((items, error) -> sync(player, inventory, () -> {
+                    clearList(inventory);
+                    if (error != null) { inventory.setItem(22, errorItem(error)); return; }
+                    List<ItemStack> cards = new ArrayList<>();
+                    for (BusinessService.BusinessView application : items) {
+                        if (cards.size() >= LIST_SLOTS.length) break;
+                        cards.add(button(GuiIcon.APPLICATION, application.name(),
+                                "business_view:" + application.id(),
+                                "Направление: " + activityLabel(application.activityType()),
+                                "Состояние заявки: " + statusLabel(application.status()),
+                                "Это регистрация, а не действующее предприятие"));
+                    }
+                    if (cards.isEmpty()) inventory.setItem(22, info(GuiIcon.CONFIRM,
+                            "Заявок нет", "Создание предприятия начинается в предыдущем разделе"));
+                    else putCenteredGrid(inventory, 1, 4, cards);
                 }));
     }
 
@@ -568,7 +600,11 @@ public final class GuiService {
                     List<IndustryService.ObjectView> objects = industry != null && "OIL_EXTRACTION".equals(business.activityType())
                             ? industry.objects(player.getUniqueId(), businessId, industryAdministrator)
                             : List.of();
-                    return new BusinessDetailScreenData(business, objects);
+                    List<BusinessLicenseType> availableLicenses = business.official() && !business.owner()
+                            && "ACTIVE".equals(business.status())
+                            ? businesses.availableLicenses(player.getUniqueId(), businessId)
+                            : List.of();
+                    return new BusinessDetailScreenData(business, objects, availableLicenses);
                 })
                 .whenComplete((data, error) -> sync(player, inventory, () -> {
                     clearList(inventory);
@@ -585,7 +621,7 @@ public final class GuiService {
                                     : "Городская регистрационная карточка"));
                     inventory.setItem(11, playerHead(business.ownerId(), business.ownerName(), null,
                             "Владелец"));
-                    if (business.balanceMinor() != null) inventory.setItem(15, info(GuiIcon.ACCOUNT,
+                    if ("ACTIVE".equals(business.status()) && business.balanceMinor() != null) inventory.setItem(15, info(GuiIcon.ACCOUNT,
                             "Счёт предприятия", formatMinor(business.balanceMinor()), "Доступен владельцу и городской власти"));
                     if (business.requestedIndustryLevel() != null || !business.applicationNote().isBlank()) {
                         inventory.setItem(16, info(GuiIcon.APPLICATION, "Заявка предпринимателя",
@@ -597,7 +633,7 @@ public final class GuiService {
                     }
 
                     List<ItemStack> actions = new ArrayList<>();
-                    if (business.owner() && business.accountId() != null) {
+                    if (business.owner() && "ACTIVE".equals(business.status()) && business.accountId() != null) {
                         actions.add(button(GuiIcon.ACCOUNT, "Пополнить счёт",
                                 "business_deposit:" + business.id(), "Перевести деньги из личного кошелька"));
                     }
@@ -605,19 +641,23 @@ public final class GuiService {
                         actions.add(button(GuiIcon.CANCEL, "Отозвать регистрацию",
                                 "business_withdraw:" + business.id(), "Закрыть ожидающее заявление"));
                     }
-                    if (business.owner() && !data.objects().isEmpty()) {
+                    if (business.owner() && "ACTIVE".equals(business.status())
+                            && "OIL_EXTRACTION".equals(business.activityType())) {
                         actions.add(button(GuiIcon.INDUSTRY, "Нефтяные объекты",
-                                "industry_business:" + business.id(), "Управление существующими установками"));
+                                "industry_business:" + business.id(),
+                                data.objects().isEmpty() ? "Получить и установить первый контроллер"
+                                        : "Управление контроллером и добывающей установкой"));
                     }
-                    boolean officialActions = business.official() && privilegedWorkspace(player);
+                    boolean officialActions = business.official() && !business.owner() && privilegedWorkspace(player);
                     if (officialActions && "PENDING".equals(business.status())) {
                         actions.add(button(GuiIcon.CONFIRM, "Одобрить регистрацию",
                                 "business_approve:" + business.id(), "Активировать предприятие и открыть счёт"));
                         actions.add(button(GuiIcon.CANCEL, "Отклонить регистрацию",
                                 "business_reject:" + business.id(), "Закрыть заявление без активации"));
-                    } else if (officialActions && "ACTIVE".equals(business.status())) {
+                    } else if (officialActions && "ACTIVE".equals(business.status())
+                            && !data.availableLicenses().isEmpty()) {
                         actions.add(button(GuiIcon.LICENSE, "Выдать лицензию",
-                                "license_choose:" + business.id(), "Выбрать тип и срок разрешения"));
+                                "license_choose:" + business.id(), "Доступно профильных разрешений: " + data.availableLicenses().size()));
                     }
                     putCentered(inventory, 2, actions);
 
@@ -627,9 +667,9 @@ public final class GuiService {
                         String action = officialActions && "ACTIVE".equals(license.status())
                                 ? "license_revoke:" + business.id() + ":" + license.type() : null;
                         ItemStack item = action == null
-                                ? info(GuiIcon.LICENSE, license.type(), "Состояние: " + statusLabel(license.status()),
+                                ? info(GuiIcon.LICENSE, BusinessLicenseType.displayName(license.type()), "Состояние: " + statusLabel(license.status()),
                                 "До: " + date(license.expiresAt()))
-                                : button(GuiIcon.LICENSE, license.type(), action,
+                                : button(GuiIcon.LICENSE, BusinessLicenseType.displayName(license.type()), action,
                                 "Состояние: " + statusLabel(license.status()), "До: " + date(license.expiresAt()),
                                 "Отозвать разрешение");
                         licenses.add(item);
@@ -655,7 +695,7 @@ public final class GuiService {
                     List<ItemStack> cards = new ArrayList<>();
                     for (int i = 0; i < items.size() && i < LIST_SLOTS.length; i++) {
                         BusinessService.LicenseCard license = items.get(i);
-                        cards.add(button(GuiIcon.LICENSE, license.type(),
+                        cards.add(button(GuiIcon.LICENSE, BusinessLicenseType.displayName(license.type()),
                                 "business_view:" + license.businessId(), "Предприятие: " + license.businessName(),
                                 "Состояние: " + statusLabel(license.status()), "До: " + date(license.expiresAt())));
                     }
@@ -1040,31 +1080,23 @@ public final class GuiService {
     private void renderLicenseTypes(Player player, Inventory inventory) {
         String businessId = selectedBusiness.get(player.getUniqueId());
         if (businessId == null) { UiText.error(player, "Предприятие больше не выбрано."); navigate(player, Route.BUSINESS); return; }
-        boolean industryAdministrator = player.hasPermission("citycore.admin.industry");
         inventory.setItem(22, loading("Загрузка доступных лицензий…"));
-        storage.submit(() -> {
-            BusinessService.BusinessDetail business = businesses.detail(player.getUniqueId(), businessId);
-            List<IndustryService.ObjectView> objects = industry != null && "OIL_EXTRACTION".equals(business.activityType())
-                    ? industry.objects(player.getUniqueId(), businessId, industryAdministrator)
-                    : List.of();
-            return new LicenseTypeData(business, objects);
-        }).whenComplete((data, error) -> sync(player, inventory, () -> {
+        storage.submit(() -> businesses.availableLicenses(player.getUniqueId(), businessId))
+                .whenComplete((types, error) -> sync(player, inventory, () -> {
             clearList(inventory);
             if (error != null) { inventory.setItem(22, errorItem(error)); return; }
             inventory.setItem(13, info(GuiIcon.LICENSE, "Выберите разрешение",
-                    "Показываются только применимые типы"));
-            List<ItemStack> types = new ArrayList<>();
-            types.add(button(GuiIcon.LICENSE, "Торговая лицензия", "license_type:TRADE",
-                    "Разрешение для действующего предприятия"));
-            if (!data.objects().isEmpty()) {
-                types.add(button(GuiIcon.OIL, "Нефтедобыча I", "license_type:OIL_EXTRACTION_I",
-                        "Для существующего объекта уровня I"));
-                types.add(button(GuiIcon.OIL, "Нефтедобыча II", "license_type:OIL_EXTRACTION_II",
-                        "Для существующего объекта уровня II"));
-                types.add(button(GuiIcon.OIL, "Нефтедобыча III", "license_type:OIL_EXTRACTION_III",
-                        "Для существующего объекта уровня III"));
+                    "Показываются только разрешения, подтверждённые направлением и осмотром"));
+            List<ItemStack> cards = new ArrayList<>();
+            for (BusinessLicenseType type : types) {
+                cards.add(button(type.oilLevel() == null ? GuiIcon.LICENSE : GuiIcon.OIL,
+                        type.displayName(), "license_type:" + type.code(),
+                        type.oilLevel() == null ? "Разрешение соответствует торговому направлению"
+                                : "Инспекция подтвердила уровень " + roman(type.oilLevel())));
             }
-            putCentered(inventory, 2, types);
+            if (cards.isEmpty()) inventory.setItem(22, info(GuiIcon.EMPTY, "Выдавать пока нечего",
+                    "Направление предприятия или завершённый осмотр ещё не дают доступных лицензий"));
+            else putCentered(inventory, 2, cards);
         }));
     }
 
@@ -1074,7 +1106,7 @@ public final class GuiService {
             inventory.setItem(22, info(GuiIcon.ERROR, "Тип не выбран", "Вернитесь к выбору лицензии")); return;
         }
         int minimum = minimumLicenseDays(type);
-        inventory.setItem(10, info(GuiIcon.LICENSE, "Срок лицензии", "Тип: " + type,
+        inventory.setItem(10, info(GuiIcon.LICENSE, "Срок лицензии", "Тип: " + BusinessLicenseType.displayName(type),
                 "Минимальный срок: " + minimum + " дней", "Выберите срок действия"));
         if (minimum <= 7) inventory.setItem(19, button(GuiIcon.DOCUMENTS, "7 дней", "license_days:7", "Короткий испытательный срок"));
         if (minimum <= 30) inventory.setItem(20, button(GuiIcon.DOCUMENTS, "30 дней", "license_days:30", "Один календарный месяц"));
@@ -1097,13 +1129,19 @@ public final class GuiService {
                     inventory.setItem(10, info(GuiIcon.OIL, data.business().name(),
                             "Деятельность: " + activityLabel(data.business().activityType()),
                             "Объектов: " + data.objects().size() + " · контроллеров: " + data.controllers().size()));
+                    if (data.business().owner() && data.controllers().isEmpty()) {
+                        inventory.setItem(13, button(GuiIcon.CONTROLLER, "Получить нефтяной контроллер",
+                                "controller_issue:" + data.business().id(),
+                                "Один контроллер создаёт один участок вокруг точки установки",
+                                "После размещения заявка на осмотр появится автоматически"));
+                    }
                     int objectIndex = 0;
                     for (IndustryService.ObjectView object : data.objects()) {
                         if (objectIndex >= 7) break;
                         inventory.setItem(19 + objectIndex++, button(GuiIcon.INDUSTRY,
                                 "Нефтяной объект" + (object.level() == null ? "" : " · " + roman(object.level())),
                                 "industry_object:" + object.id(), "Состояние: " + statusLabel(object.status()),
-                                "Месторождение: " + object.depositName(), "Остаток: " + object.reserveRemaining() + " ед."));
+                                "Участок: " + object.depositName(), "Остаток: " + object.reserveRemaining() + " барр."));
                     }
                     int controllerIndex = 0;
                     for (IndustryService.ControllerView controller : data.controllers()) {
@@ -1136,11 +1174,16 @@ public final class GuiService {
                 if ("PLACED".equals(value.state())) inventory.setItem(20, button(GuiIcon.CONTROLLER, "Восстановить привязку",
                         "controller_rebind:" + value.serial(), "Вернуть объект в состояние паузы после установки"));
             } else if ("PLACED".equals(value.state())) {
-                inventory.setItem(19, info(GuiIcon.CONTROLLER, "Контроллер ожидает новую систему участков",
-                        "Ручной выбор месторождения отключён", "Снимите контроллер или дождитесь Alpha 22"));
+                inventory.setItem(19, info(GuiIcon.ERROR, "Не создан автоматический участок",
+                        "Это устаревшее состояние данных, не возникающее у новых контроллеров",
+                        "Снимите и заново установите контроллер; при повторении сообщите администратору"));
             } else if ("ISSUED".equals(value.state())) {
                 inventory.setItem(19, info(GuiIcon.CONTROLLER, "Сначала установите контроллер",
                         "Поставьте предмет как блок в выбранной точке", "Затем нажмите по нему ПКМ"));
+                if (value.issuedTo().equals(player.getUniqueId())) inventory.setItem(20, button(GuiIcon.APPLICATION,
+                        "Восстановить предмет контроллера", "controller_recover:" + value.serial(),
+                        "Используйте, если предмет был потерян до установки",
+                        "Будет выдана копия того же серийного номера, а не новый объект"));
             }
         }));
     }
@@ -1180,12 +1223,13 @@ public final class GuiService {
                             "Предприятие: " + object.businessName(), "Состояние: " + statusLabel(object.status()),
                             object.lastError().isBlank() ? "Ошибок нет" : "Причина: " + shorten(object.lastError(), 60)));
                     inventory.setItem(11, info(GuiIcon.DEPOSIT, object.depositName(),
-                            "Запас: " + object.reserveRemaining() + " / " + object.reserveTotal(),
-                            "Лимит периода: " + object.throughputLimit()));
+                            "Запас: " + object.reserveRemaining() + " / " + object.reserveTotal() + " барр.",
+                            "Лимит периода: " + object.throughputLimit() + " барр."));
                     inventory.setItem(12, button(plugin.config().industry().controllerMaterial(), object.controllerSerial(),
                             "industry_controller:" + object.controllerSerial(),
                             "Контроллер: " + statusLabel(object.controllerState()),
-                            "Лицензия: " + (object.level() == null ? "после инспекции" : "OIL_EXTRACTION_" + roman(object.level())),
+                            "Лицензия: " + (object.level() == null ? "станет доступна после инспекции"
+                                    : BusinessLicenseType.oil(object.level()).displayName()),
                             "Открыть размещение и перепривязку"));
                     inventory.setItem(13, info(GuiIcon.ACCOUNT, "Финансовое состояние",
                             "Счёт: " + formatMinor(object.businessBalanceMinor()), "Долг: " + formatMinor(object.debtMinor()),
@@ -1195,11 +1239,7 @@ public final class GuiService {
 
                     int action = 19;
                     if (object.owner()) {
-                        if ("DRAFT".equals(object.status())) inventory.setItem(action++, button(GuiIcon.APPLICATION,
-                                "Подать на осмотр", "industry_submit:" + object.id(), "Передать объект городскому инспектору"));
-                        else if ("PENDING_INSPECTION".equals(object.status())) inventory.setItem(action++, button(GuiIcon.CANCEL,
-                                "Отозвать заявку", "industry_withdraw:" + object.id(), "Вернуть контроллер в свободное состояние"));
-                        else if ("REJECTED".equals(object.status()) || "CANCELLED".equals(object.status())) inventory.setItem(action++, button(GuiIcon.APPLICATION,
+                        if ("REJECTED".equals(object.status()) || "CANCELLED".equals(object.status())) inventory.setItem(action++, button(GuiIcon.APPLICATION,
                                 "Подать повторно", "industry_resubmit:" + object.id(), "После исправления замечаний инспектора"));
                         else if ("ACTIVE".equals(object.status())) inventory.setItem(action++, button(GuiIcon.STATUS,
                                 "Остановить производство", "industry_pause:" + object.id(), "Обязательные платежи продолжат учитываться"));
@@ -1208,7 +1248,7 @@ public final class GuiService {
                         if (!"DECOMMISSIONED".equals(object.status())) inventory.setItem(action, button(GuiIcon.CANCEL,
                                 "Вывести из эксплуатации", "industry_decommission:" + object.id(), "Необратимо остановить новые циклы", "Долг и история сохранятся"));
                     }
-                    if (object.official() && "PENDING_INSPECTION".equals(object.status())) {
+                    if (object.official() && !object.owner() && "PENDING_INSPECTION".equals(object.status())) {
                         inventory.setItem(28, button(Material.COPPER_INGOT, "Одобрить уровень I", "industry_inspect:" + object.id() + ":1", "Малая установка"));
                         inventory.setItem(29, button(Material.IRON_INGOT, "Одобрить уровень II", "industry_inspect:" + object.id() + ":2", "Промышленная установка"));
                         inventory.setItem(30, button(Material.GOLD_INGOT, "Одобрить уровень III", "industry_inspect:" + object.id() + ":3", "Крупный комплекс"));
@@ -1218,7 +1258,7 @@ public final class GuiService {
                     for (IndustryService.CycleView value : data.cycles()) {
                         if (cycle >= 7) break;
                         inventory.setItem(37 + cycle++, info(GuiIcon.STATUS, dateTime(value.dueAt()),
-                                "Состояние: " + statusLabel(value.state()), "Добыто: " + value.extractedUnits() + " ед.",
+                                "Состояние: " + statusLabel(value.state()), "Добыто: " + value.extractedUnits() + " барр.",
                                 "Выручка: " + formatMinor(value.grossMinor()), "Результат: " + formatMinor(value.netMinor())));
                     }
                 }));
@@ -1233,7 +1273,7 @@ public final class GuiService {
             for (int i = 0; i < items.size() && i < LIST_SLOTS.length; i++) {
                 IndustryService.ObjectView object = items.get(i);
                 inventory.setItem(LIST_SLOTS[i], button(GuiIcon.INSPECTION, object.businessName(),
-                        "industry_object:" + object.id(), "Месторождение: " + object.depositName(),
+                        "industry_object:" + object.id(), "Автоматический участок: " + object.depositName(),
                         "Контроллер: " + object.controllerSerial(), "Подано: " + date(object.submittedAt())));
             }
             if (items.isEmpty()) inventory.setItem(22, info(GuiIcon.EMPTY, "Очередь пуста", "Новых объектов на проверку нет"));
@@ -1556,7 +1596,8 @@ public final class GuiService {
         } else if (action.startsWith("license_revoke:")) {
             String[] parts = action.split(":", 3);
             if (parts.length != 3) return;
-            confirm(player, "Отозвать лицензию " + parts[2], "Новые операции этого типа будут запрещены.",
+            confirm(player, "Отозвать лицензию «" + BusinessLicenseType.displayName(parts[2]) + "»",
+                    "Новые операции этого типа будут запрещены.",
                     "Отозвать лицензию", () -> {
                         businesses.revokeLicense(player.getUniqueId(), parts[1], parts[2]);
                         return "Лицензия отозвана.";
@@ -1566,6 +1607,8 @@ public final class GuiService {
             rememberReturn(player, Route.INDUSTRY_BUSINESS, current); navigate(player, Route.INDUSTRY_BUSINESS);
         } else if (action.startsWith("controller_issue:")) {
             issueController(player, action.substring("controller_issue:".length()));
+        } else if (action.startsWith("controller_recover:")) {
+            recoverControllerItem(player, action.substring("controller_recover:".length()));
         } else if (action.startsWith("industry_controller:")) {
             selectedController.put(player.getUniqueId(), action.substring("industry_controller:".length()));
             rememberReturn(player, Route.INDUSTRY_CONTROLLER, current); navigate(player, Route.INDUSTRY_CONTROLLER);
@@ -1772,12 +1815,34 @@ public final class GuiService {
                 }));
     }
 
+    private void recoverControllerItem(Player player, String serial) {
+        player.closeInventory();
+        storage.submit(() -> industry.recoverIssuedController(player.getUniqueId(), serial)).whenComplete((controller, error) ->
+                plugin.getServer().getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) return;
+                    if (error != null) { failure(player, error); return; }
+                    ItemStack item = controllerItems.create(plugin.config().industry().controllerMaterial(),
+                            controller.serial(), controller.businessName());
+                    Map<Integer, ItemStack> remaining = player.getInventory().addItem(item);
+                    remaining.values().forEach(left -> player.getWorld().dropItemNaturally(player.getLocation(), left));
+                    feedback.success(player);
+                    UiText.success(player, "Предмет контроллера " + controller.serial()
+                            + " восстановлен. Копии этого номера не создают дополнительные объекты.");
+                    navigate(player, Route.INDUSTRY_CONTROLLER);
+                }));
+    }
+
     private void confirmSelectedLicense(Player player, int days) {
         String businessId = selectedBusiness.get(player.getUniqueId());
         String type = selectedLicenseType.get(player.getUniqueId());
         if (businessId == null || type == null) { UiText.error(player, "Предприятие или тип лицензии больше не выбраны."); return; }
-        confirm(player, "Выдать лицензию " + type, "Срок действия: " + days + " дней. Предприятие и полномочия проверятся повторно.",
-                "Выдать лицензию", () -> "Лицензия выдана: " + businesses.issueLicense(player.getUniqueId(), businessId, type, days).type() + ".",
+        String displayName = BusinessLicenseType.displayName(type);
+        confirm(player, "Выдать лицензию «" + displayName + "»",
+                "Срок действия: " + days + " дней. Предприятие, направление, осмотр и полномочия проверятся повторно.",
+                "Выдать лицензию", () -> {
+                    BusinessService.LicenseView issued = businesses.issueLicense(player.getUniqueId(), businessId, type, days);
+                    return "Выдано разрешение: " + BusinessLicenseType.displayName(issued.type()) + ".";
+                },
                 Route.BUSINESS_DETAIL);
     }
 
@@ -1843,7 +1908,7 @@ public final class GuiService {
             case COMMUNICATIONS -> Route.HOME;
             case BUSINESS_ACTIVITY -> Route.BUSINESS;
             case BUSINESS_OIL_LEVEL -> Route.BUSINESS_ACTIVITY;
-            case BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES -> Route.BUSINESS;
+            case BUSINESS_APPLICATIONS, BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES -> Route.BUSINESS;
             case CITY_FOUNDATIONS_ADMIN, EMISSION -> Route.ADMIN;
             case CITY_FOUNDATION_DETAIL -> Route.CITY_FOUNDATIONS_ADMIN;
             case LICENSE_TYPE -> Route.BUSINESS_DETAIL;
@@ -1992,7 +2057,7 @@ public final class GuiService {
             case HOME, PROFILE -> GuiIcon.BRAND;
             case CITY, CITY_STATS, CITY_DIRECTORY, CITY_APPLICATIONS, CITY_APPLICATION_DETAIL, CITY_MEMBERS,
                     MAYOR, MAYOR_TRANSFER, MAYOR_TRANSFER_INBOX -> GuiIcon.CITY;
-            case BUSINESS, BUSINESS_ACTIVITY, BUSINESS_OIL_LEVEL, BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES, ECONOMY, LICENSE_TYPE,
+            case BUSINESS, BUSINESS_APPLICATIONS, BUSINESS_ACTIVITY, BUSINESS_OIL_LEVEL, BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES, ECONOMY, LICENSE_TYPE,
                     LICENSE_DURATION -> GuiIcon.BUSINESS;
             case COMMUNICATIONS, PHONE_DEVICE, RADIO_CHANNELS -> GuiIcon.COMMUNICATIONS;
             case ADMIN, CITY_FOUNDATIONS_ADMIN, CITY_FOUNDATION_DETAIL, EMISSION,
@@ -2171,6 +2236,7 @@ public final class GuiService {
             case CITY_APPLICATION_DETAIL -> "CityCore · Решение по заявлению";
             case CITY_MEMBERS -> "CityCore · Жители";
             case BUSINESS -> "CityCore · Предприятия";
+            case BUSINESS_APPLICATIONS -> "CityCore · Мои заявки";
             case BUSINESS_ACTIVITY -> "CityCore · Направление предприятия";
             case BUSINESS_OIL_LEVEL -> "CityCore · Оценка нефтевышки";
             case BUSINESS_PENDING -> "CityCore · Регистрации";
@@ -2227,7 +2293,8 @@ public final class GuiService {
                                   CityService.FoundationApplication foundation) {}
     private record CityStatsScreenData(CityService.CityView city, CityService.CityStats stats) {}
     private record MemberScreenData(CityService.CityView city, List<CityService.Member> members) {}
-    private record BusinessScreenData(CityService.CityView city, List<BusinessService.BusinessView> items) {}
+    private record BusinessScreenData(CityService.CityView city, List<BusinessService.BusinessView> items,
+                                      List<BusinessService.BusinessView> applications) {}
     private record BusinessDraft(String slug, String name, BusinessActivity activity,
                                  Integer requestedLevel, String applicationNote) {
         BusinessDraft(String slug, String name) { this(slug, name, null, null, ""); }
@@ -2237,9 +2304,8 @@ public final class GuiService {
         }
     }
     private record BusinessDetailScreenData(BusinessService.BusinessDetail business,
-                                            List<IndustryService.ObjectView> objects) {}
-    private record LicenseTypeData(BusinessService.BusinessDetail business,
-                                   List<IndustryService.ObjectView> objects) {}
+                                            List<IndustryService.ObjectView> objects,
+                                            List<BusinessLicenseType> availableLicenses) {}
     private record MayorWorkspaceData(CityService.CityView city,
                                       List<CityService.Application> citizenshipApplications,
                                       List<BusinessService.BusinessView> businesses,

@@ -82,6 +82,10 @@ public final class Migrations {
             "ALTER TABLE business ADD COLUMN application_note TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE business ADD COLUMN review_required INTEGER NOT NULL DEFAULT 1 CHECK(review_required IN (0,1))",
             "CREATE INDEX IF NOT EXISTS idx_business_review_queue ON business(city_id,review_required,status,created_at)"
+    ), List.of(
+            "ALTER TABLE resource_deposit ADD COLUMN source_type TEXT NOT NULL DEFAULT 'LEGACY'",
+            "CREATE INDEX IF NOT EXISTS idx_resource_deposit_world_position ON resource_deposit(world_uuid,x,z,status)",
+            "CREATE INDEX IF NOT EXISTS idx_business_owner_status ON business(owner_uuid,status,created_at)"
     ));
 
     private Migrations() {}

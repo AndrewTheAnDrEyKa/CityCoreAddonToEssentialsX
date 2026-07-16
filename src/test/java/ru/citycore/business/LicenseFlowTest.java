@@ -21,12 +21,14 @@ class LicenseFlowTest {
 
     @Test void tradeForThirtyDaysIsAcceptedAfterNormalization() {
         database = new Database(temp.resolve("citycore.db"), 1); Migrations.apply(database);
-        UUID mayor = profile(); CityService cities = new CityService(database);
+        UUID mayor = profile("Mayor"); UUID owner = profile("Owner"); CityService cities = new CityService(database);
         var foundation = cities.submitFoundation(mayor, "license_city", "Город лицензий",
                 "Город создаётся для проверки выдачи лицензий");
         cities.decideFoundation(UUID.randomUUID(), foundation.id(), true, "Одобрено тестом");
+        cities.apply(owner, "license_city"); cities.decide(mayor, owner, true);
         BusinessService businesses = new BusinessService(database);
-        String id = businesses.register(mayor, "trade_test", "Торговое предприятие").id();
+        String id = businesses.register(owner, "trade_test", "Торговое предприятие",
+                BusinessActivity.TRADE.name(), null, "").id();
         businesses.decide(mayor, id, true);
 
         BusinessService.LicenseView license = businesses.issueLicense(mayor, id, "\uFEFF\u00a0tra\u200Bde\u00a0", 30);
@@ -35,11 +37,11 @@ class LicenseFlowTest {
         assertEquals("ACTIVE", license.status());
     }
 
-    private UUID profile() {
+    private UUID profile(String name) {
         UUID id = UUID.randomUUID();
         database.transaction(connection -> {
             try (var insert = connection.prepareStatement("INSERT INTO player_profile(uuid,last_name,created_at,updated_at) VALUES(?,?,?,?)")) {
-                String now = Instant.now().toString(); insert.setString(1, id.toString()); insert.setString(2, "Mayor");
+                String now = Instant.now().toString(); insert.setString(1, id.toString()); insert.setString(2, name);
                 insert.setString(3, now); insert.setString(4, now); insert.executeUpdate();
             }
             return null;

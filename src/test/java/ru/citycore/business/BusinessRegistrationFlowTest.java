@@ -70,6 +70,20 @@ class BusinessRegistrationFlowTest {
                 "bad_oil", "Неполная заявка", BusinessActivity.OIL_EXTRACTION.name(), null, "коротко"));
     }
 
+    @Test void applicantCannotApproveOwnRegistrationAndApplicationsStayOutOfRegistry() {
+        Setup setup = setup();
+        setup.businesses().register(setup.official(), "own_oil", "Собственная нефть",
+                BusinessActivity.OIL_EXTRACTION.name(), 1,
+                "Проверка запрета самостоятельного решения по нефтяному предприятию");
+
+        assertTrue(setup.businesses().list(setup.official(), false).isEmpty());
+        assertTrue(setup.businesses().list(setup.official(), true).isEmpty());
+        BusinessService.BusinessView application = setup.businesses().applications(setup.official()).getFirst();
+        assertEquals("PENDING", application.status());
+        assertThrows(RuntimeException.class,
+                () -> setup.businesses().decide(setup.official(), application.id(), true));
+    }
+
     private Setup setup() {
         database = new Database(temp.resolve("citycore.db"), 1);
         Migrations.apply(database);

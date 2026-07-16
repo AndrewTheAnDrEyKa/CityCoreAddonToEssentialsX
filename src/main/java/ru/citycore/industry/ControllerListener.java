@@ -86,7 +86,7 @@ public final class ControllerListener implements Listener {
                     }
                     block.setType(material, false);
                     locations.put(new BlockKey(worldId, x, y, z), serial);
-                    UiText.success(player, "Контроллер установлен. Нажмите ПКМ по блоку для продолжения.");
+                    UiText.success(player, "Контроллер установлен. Участок создан автоматически, заявка на осмотр отправлена. Нажмите ПКМ по блоку.");
                 }));
     }
 
@@ -100,8 +100,12 @@ public final class ControllerListener implements Listener {
                 .whenComplete((value, error) -> plugin.getServer().getScheduler().runTask(plugin, () -> {
                     if (error != null) { UiText.error(player, "Контроллер не снят: " + rootMessage(error)); return; }
                     locations.remove(BlockKey.of(block)); block.setType(Material.AIR, false);
-                    returnItem(player, items.create(material, value.serial(), value.businessName()));
-                    UiText.success(player, "Контроллер снят. Производство связанного объекта остановлено.");
+                    if ("RETIRED".equals(value.state())) {
+                        UiText.success(player, "Выведенный из эксплуатации контроллер демонтирован. Теперь можно получить новый для другого участка.");
+                    } else {
+                        returnItem(player, items.create(material, value.serial(), value.businessName()));
+                        UiText.success(player, "Контроллер снят. Производство временно остановлено; верните его в исходную точку для продолжения.");
+                    }
                 }));
     }
 
