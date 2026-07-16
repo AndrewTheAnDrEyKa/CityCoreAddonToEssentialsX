@@ -469,7 +469,7 @@ public final class GuiService {
                     }
                     if (business.owner() && "ACTIVE".equals(business.status())) {
                         if ("GENERAL".equals(business.activityType())) {
-                            inventory.setItem(actionSlot++, button(Material.OIL_BUCKET, "Выбрать нефтедобычу",
+                            inventory.setItem(actionSlot++, button(Material.BUCKET, "Выбрать нефтедобычу",
                                     "business_oil_activity:" + business.id(), "Перевести предприятие в нефтяную отрасль",
                                     "После создания объекта деятельность фиксируется"));
                         } else if ("OIL_EXTRACTION".equals(business.activityType())) {
@@ -578,7 +578,7 @@ public final class GuiService {
                 "Ожидающие заявления можно отозвать", "Выход и отставка сохраняют историю и обязательства"));
         inventory.setItem(20, info(Material.ENCHANTED_BOOK, "Лицензии",
                 "Тип и срок выбираются кнопками", "Технический код вводить не требуется"));
-        inventory.setItem(21, info(Material.OIL_BUCKET, "Нефтяной объект",
+        inventory.setItem(21, info(Material.BUCKET, "Нефтяной объект",
                 "Экономика → Предприятия → Карточка → Нефтяные объекты"));
     }
 
@@ -606,7 +606,7 @@ public final class GuiService {
                             "Реестр разрешений предприятий"));
                     inventory.setItem(16, button(Material.GOLD_BLOCK, "Казна и счета", "route:ECONOMY",
                             "Баланс города и пополнение"));
-                    inventory.setItem(19, button(Material.OIL_BUCKET, "Промышленная политика", "route:INDUSTRY_POLICY",
+                    inventory.setItem(19, button(Material.BUCKET, "Промышленная политика", "route:INDUSTRY_POLICY",
                             "Закупочный фонд и налог на нефтедобычу"));
                 }));
     }
@@ -833,9 +833,9 @@ public final class GuiService {
         inventory.setItem(10, info(Material.ENCHANTED_BOOK, "Выберите тип лицензии",
                 "Технический код больше не требуется вводить в чат"));
         inventory.setItem(19, button(Material.PAPER, "Торговая лицензия", "license_type:TRADE", "Код: TRADE"));
-        inventory.setItem(20, button(Material.OIL_BUCKET, "Нефтедобыча I", "license_type:OIL_EXTRACTION_I", "Для объекта уровня I"));
-        inventory.setItem(21, button(Material.OIL_BUCKET, "Нефтедобыча II", "license_type:OIL_EXTRACTION_II", "Для объекта уровня II"));
-        inventory.setItem(22, button(Material.OIL_BUCKET, "Нефтедобыча III", "license_type:OIL_EXTRACTION_III", "Для объекта уровня III"));
+        inventory.setItem(20, button(Material.BUCKET, "Нефтедобыча I", "license_type:OIL_EXTRACTION_I", "Для объекта уровня I"));
+        inventory.setItem(21, button(Material.BUCKET, "Нефтедобыча II", "license_type:OIL_EXTRACTION_II", "Для объекта уровня II"));
+        inventory.setItem(22, button(Material.BUCKET, "Нефтедобыча III", "license_type:OIL_EXTRACTION_III", "Для объекта уровня III"));
     }
 
     private void renderLicenseDuration(Player player, Inventory inventory) {
@@ -864,7 +864,7 @@ public final class GuiService {
                 .whenComplete((data, error) -> sync(player, inventory, () -> {
                     clearList(inventory);
                     if (error != null) { inventory.setItem(22, errorItem(error)); return; }
-                    inventory.setItem(10, info(Material.OIL_BUCKET, data.business().name(),
+                    inventory.setItem(10, info(Material.BUCKET, data.business().name(),
                             "Деятельность: " + activityLabel(data.business().activityType()),
                             "Объектов: " + data.objects().size() + " · контроллеров: " + data.controllers().size()));
                     int objectIndex = 0;
