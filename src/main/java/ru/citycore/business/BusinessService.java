@@ -25,19 +25,52 @@ public final class BusinessService {
     }
 
     public BusinessView register(UUID owner, String rawSlug, String rawName) {
+        return register(owner, rawSlug, rawName, BusinessActivity.GENERAL.name(), null, "");
+    }
+
+    public BusinessView register(UUID owner, String rawSlug, String rawName, String rawActivity,
+                                 Integer requestedIndustryLevel, String rawApplicationNote) {
         String slug = rawSlug.toLowerCase(Locale.ROOT).trim(); String name = rawName.trim();
         if (!SLUG.matcher(slug).matches()) throw new IllegalArgumentException("ID бизнеса: 3–24 символа, a-z, 0-9, _ или -");
         if (name.length() < 3 || name.length() > 48) throw new IllegalArgumentException("Название бизнеса: от 3 до 48 символов");
+        BusinessActivity activity = BusinessActivity.parse(rawActivity);
+        String applicationNote = rawApplicationNote == null ? "" : rawApplicationNote.strip();
+        if (activity.questionnaireRequired()) {
+            if (requestedIndustryLevel == null || requestedIndustryLevel < 1 || requestedIndustryLevel > 3) {
+                throw new IllegalArgumentException("Для нефтедобычи укажите ожидаемый уровень вышки I–III");
+            }
+            if (applicationNote.length() < 15 || applicationNote.length() > 180) {
+                throw new IllegalArgumentException("Описание нефтяного проекта: от 15 до 180 символов");
+            }
+        } else {
+            requestedIndustryLevel = null;
+            applicationNote = "";
+        }
+        Integer requestedLevel = requestedIndustryLevel;
+        String note = applicationNote;
         return database.transaction(connection -> {
             Authority membership = authority(connection, owner);
             if (membership == null) throw new IllegalStateException("Для регистрации требуется гражданство");
             String id = UUID.randomUUID().toString(); String now = Instant.now().toString();
-            try (var insert = connection.prepareStatement("INSERT INTO business(id,city_id,owner_uuid,slug,name,status,activity_type,created_at) VALUES(?,?,?,?,?,'PENDING','GENERAL',?)")) {
+            String status = activity.reviewRequired() ? "PENDING" : "ACTIVE";
+            try (var insert = connection.prepareStatement("""
+                    INSERT INTO business(id,city_id,owner_uuid,slug,name,status,activity_type,created_at,
+                                         requested_industry_level,application_note,review_required)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                    """)) {
                 insert.setString(1, id); insert.setString(2, membership.cityId()); insert.setString(3, owner.toString());
-                insert.setString(4, slug); insert.setString(5, name); insert.setString(6, now); insert.executeUpdate();
+                insert.setString(4, slug); insert.setString(5, name); insert.setString(6, status);
+                insert.setString(7, activity.name()); insert.setString(8, now);
+                if (requestedLevel == null) insert.setNull(9, java.sql.Types.INTEGER); else insert.setInt(9, requestedLevel);
+                insert.setString(10, note); insert.setInt(11, activity.reviewRequired() ? 1 : 0); insert.executeUpdate();
             }
-            AuditLog.append(connection, "BUSINESS_REGISTERED", owner, "BUSINESS", id, "city=" + membership.cityId() + ";slug=" + slug);
-            return new BusinessView(id, membership.cityId(), owner, slug, name, "PENDING", "GENERAL", null);
+            String accountId = null;
+            if (!activity.reviewRequired()) accountId = createBusinessAccount(connection, id);
+            AuditLog.append(connection, activity.reviewRequired() ? "BUSINESS_REGISTERED" : "BUSINESS_AUTO_APPROVED",
+                    owner, "BUSINESS", id, "city=" + membership.cityId() + ";slug=" + slug
+                            + ";activity=" + activity.name() + ";requestedLevel=" + (requestedLevel == null ? "" : requestedLevel));
+            return new BusinessView(id, membership.cityId(), owner, slug, name, status, activity.name(), accountId,
+                    requestedLevel, note, activity.reviewRequired());
         });
     }
 
@@ -55,10 +88,7 @@ public final class BusinessService {
     }
 
     public void setActivity(UUID owner, String businessId, String rawActivity) {
-        String activity = normalizeLicenseType(rawActivity);
-        if (!"GENERAL".equals(activity) && !"OIL_EXTRACTION".equals(activity)) {
-            throw new IllegalArgumentException("Доступный вид деятельности: GENERAL или OIL_EXTRACTION");
-        }
+        String activity = BusinessActivity.parse(rawActivity).name();
         database.transaction(connection -> {
             try (var update = connection.prepareStatement("UPDATE business SET activity_type=? WHERE id=? AND owner_uuid=? AND status='ACTIVE' AND NOT EXISTS(SELECT 1 FROM industrial_object WHERE business_id=?)")) {
                 update.setString(1, activity); update.setString(2, businessId); update.setString(3, owner.toString()); update.setString(4, businessId);
@@ -82,10 +112,7 @@ public final class BusinessService {
                 if (update.executeUpdate() != 1) throw new IllegalStateException("Статус бизнеса не изменён");
             }
             if (approve) {
-                try (var account = connection.prepareStatement("INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,?,?,?,0,0)")) {
-                    account.setString(1, UUID.randomUUID().toString()); account.setString(2, "BUSINESS");
-                    account.setString(3, businessId); account.setString(4, "ESSENTIALS"); account.executeUpdate();
-                }
+                createBusinessAccount(connection, businessId);
             }
             AuditLog.append(connection, approve ? "BUSINESS_APPROVED" : "BUSINESS_REJECTED", actor, "BUSINESS", businessId, "city=" + authority.cityId());
             return null;
@@ -145,7 +172,33 @@ public final class BusinessService {
             try (var query = connection.prepareStatement(sql)) {
                 query.setString(1, pendingOnly || official ? membership.cityId() : actor.toString());
                 try (var rs = query.executeQuery()) {
-                    while (rs.next()) result.add(new BusinessView(rs.getString("id"), rs.getString("city_id"), UUID.fromString(rs.getString("owner_uuid")), rs.getString("slug"), rs.getString("name"), rs.getString("status"), rs.getString("activity_type"), rs.getString("account_id")));
+                    while (rs.next()) result.add(readBusinessView(rs));
+                }
+            }
+            return List.copyOf(result);
+        });
+    }
+
+    public int pendingReviewCount(UUID actor) {
+        return database.transaction(connection -> {
+            Authority authority = authority(connection, actor);
+            if (authority == null || (authority.role() != CityRole.MAYOR && authority.role() != CityRole.OFFICIAL)) return 0;
+            try (var query = connection.prepareStatement(
+                    "SELECT COUNT(*) FROM business WHERE city_id=? AND status='PENDING' AND review_required=1")) {
+                query.setString(1, authority.cityId());
+                try (var rs = query.executeQuery()) { return rs.next() ? rs.getInt(1) : 0; }
+            }
+        });
+    }
+
+    public List<UUID> reviewerIds(String cityId) {
+        return database.transaction(connection -> {
+            List<UUID> result = new ArrayList<>();
+            try (var query = connection.prepareStatement(
+                    "SELECT player_uuid FROM citizenship WHERE city_id=? AND role IN ('MAYOR','OFFICIAL')")) {
+                query.setString(1, cityId);
+                try (var rs = query.executeQuery()) {
+                    while (rs.next()) result.add(UUID.fromString(rs.getString(1)));
                 }
             }
             return List.copyOf(result);
@@ -156,7 +209,8 @@ public final class BusinessService {
         return database.transaction(connection -> {
             Authority authority = authority(connection, actor);
             try (var query = connection.prepareStatement("""
-                    SELECT b.id,b.city_id,b.owner_uuid,b.slug,b.name,b.status,b.activity_type,p.last_name,
+                    SELECT b.id,b.city_id,b.owner_uuid,b.slug,b.name,b.status,b.activity_type,
+                           b.requested_industry_level,b.application_note,b.review_required,p.last_name,
                            a.id account_id,a.balance_minor
                     FROM business b
                     JOIN player_profile p ON p.uuid=b.owner_uuid
@@ -182,6 +236,7 @@ public final class BusinessService {
                     return new BusinessDetail(rs.getString("id"), rs.getString("city_id"), ownerId,
                             rs.getString("last_name"), rs.getString("slug"), rs.getString("name"),
                             rs.getString("status"), rs.getString("activity_type"), rs.getString("account_id"), balance, owner, official,
+                            requestedLevel(rs), rs.getString("application_note"), rs.getInt("review_required") == 1,
                             readLicenses(connection, businessId));
                 }
             }
@@ -240,6 +295,27 @@ public final class BusinessService {
         return List.copyOf(result);
     }
 
+    private String createBusinessAccount(java.sql.Connection connection, String businessId) throws Exception {
+        String id = UUID.randomUUID().toString();
+        try (var account = connection.prepareStatement(
+                "INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,'BUSINESS',?,'ESSENTIALS',0,0)")) {
+            account.setString(1, id); account.setString(2, businessId); account.executeUpdate();
+        }
+        return id;
+    }
+
+    private BusinessView readBusinessView(java.sql.ResultSet rs) throws Exception {
+        return new BusinessView(rs.getString("id"), rs.getString("city_id"), UUID.fromString(rs.getString("owner_uuid")),
+                rs.getString("slug"), rs.getString("name"), rs.getString("status"), rs.getString("activity_type"),
+                rs.getString("account_id"), requestedLevel(rs), rs.getString("application_note"),
+                rs.getInt("review_required") == 1);
+    }
+
+    private Integer requestedLevel(java.sql.ResultSet rs) throws Exception {
+        int value = rs.getInt("requested_industry_level");
+        return rs.wasNull() ? null : value;
+    }
+
     private Authority requireOfficial(java.sql.Connection connection, UUID actor) throws Exception {
         Authority value = authority(connection, actor);
         if (value == null || (value.role() != CityRole.MAYOR && value.role() != CityRole.OFFICIAL)) throw new SecurityException("Требуется должность мэра или чиновника");
@@ -269,11 +345,14 @@ public final class BusinessService {
     }
     private record Authority(String cityId, CityRole role) {}
     private record BusinessRow(String cityId, String status) {}
-    public record BusinessView(String id, String cityId, UUID ownerId, String slug, String name, String status, String activityType, String accountId) {}
+    public record BusinessView(String id, String cityId, UUID ownerId, String slug, String name, String status,
+                               String activityType, String accountId, Integer requestedIndustryLevel,
+                               String applicationNote, boolean reviewRequired) {}
     public record LicenseView(String id, String businessId, String type, String status, Instant issuedAt, Instant expiresAt) {}
     public record BusinessDetail(String id, String cityId, UUID ownerId, String ownerName, String slug,
                                  String name, String status, String activityType, String accountId, Long balanceMinor,
-                                 boolean owner, boolean official, List<LicenseView> licenses) {}
+                                 boolean owner, boolean official, Integer requestedIndustryLevel,
+                                 String applicationNote, boolean reviewRequired, List<LicenseView> licenses) {}
     public record LicenseCard(String id, String businessId, String businessName, String type, String status,
                               Instant issuedAt, Instant expiresAt) {}
 }

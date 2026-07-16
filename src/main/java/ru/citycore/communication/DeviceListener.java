@@ -49,7 +49,7 @@ public final class DeviceListener implements Listener {
         }
         try {
             if (type == DeviceType.PHONE) gui.open(event.getPlayer(), Route.PHONE_DEVICE);
-            else if (event.getPlayer().isSneaking()) gui.open(event.getPlayer(), Route.COMMUNICATIONS);
+            else if (event.getPlayer().isSneaking()) gui.open(event.getPlayer(), Route.RADIO_CHANNELS);
             else communication.toggleRadio(event.getPlayer());
         } catch (RuntimeException error) {
             UiText.error(event.getPlayer(), error.getMessage());
@@ -64,7 +64,7 @@ public final class DeviceListener implements Listener {
         if (!devices.items().isDevice(event.getItemDrop().getItemStack())
                 && !navigator.matches(event.getItemDrop().getItemStack())) return;
         event.setCancelled(true);
-        UiText.info(event.getPlayer(), "Системное устройство нельзя выбросить. Управление доступно через /cc и раздел «Связь».");
+        UiText.info(event.getPlayer(), "Системное устройство нельзя выбросить. Используйте ПКМ по самому устройству.");
     }
 
     @EventHandler public void onRespawn(PlayerRespawnEvent event) {

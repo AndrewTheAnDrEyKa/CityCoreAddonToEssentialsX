@@ -20,6 +20,9 @@ import java.util.regex.Pattern;
 /** Database-authoritative industrial vertical slice for finite oil extraction. */
 public final class IndustryService {
     private static final Pattern SLUG = Pattern.compile("[a-z0-9][a-z0-9_-]{2,23}");
+    public static final int STATE_OIL_SALES_TAX_BPS = 2_000;
+    private static final String STATE_PROCUREMENT_ACCOUNT = "STATE_OIL_PROCUREMENT";
+    private static final String STATE_REVENUE_ACCOUNT = "STATE_OIL_REVENUE";
     private final Database database;
     private final InternalLedger ledger;
     private final Supplier<IndustrySettings> settings;
@@ -55,7 +58,6 @@ public final class IndustryService {
                 insert.setString(14, actor.toString()); insert.setString(15, now.toString()); insert.setString(16, now.toString());
                 insert.executeUpdate();
             }
-            ensurePolicy(connection, cityId, actor);
             AuditLog.append(connection, "RESOURCE_DEPOSIT_CREATED", actor, "RESOURCE_DEPOSIT", id,
                     "slug=" + slug + ";city=" + cityId + ";reserve=" + reserve + ";throughput=" + throughput);
             return new DepositView(id, slug, name, cityId, worldId, worldName, x, y, z, radius,
@@ -440,42 +442,6 @@ public final class IndustryService {
         return database.transaction(connection -> object(connection, actor, objectId, administrator));
     }
 
-    public PolicyView policy(UUID actor) {
-        return database.transaction(connection -> {
-            Authority authority = authority(connection, actor);
-            if (authority == null) throw new IllegalStateException("Игрок не состоит в городе");
-            return policy(connection, authority.cityId(), actor);
-        });
-    }
-
-    public void setTax(UUID mayor, int taxBps) {
-        IndustrySettings cfg = settings.get();
-        if (taxBps < 0 || taxBps > cfg.maxTaxBps()) throw new IllegalArgumentException("Налог: от 0 до " + (cfg.maxTaxBps() / 100.0) + "%");
-        database.transaction(connection -> {
-            Authority authority = requireMayor(connection, mayor);
-            ensurePolicy(connection, authority.cityId(), mayor);
-            try (var update = connection.prepareStatement("UPDATE city_industry_policy SET tax_bps=?,updated_at=?,updated_by=? WHERE city_id=?")) {
-                update.setInt(1, taxBps); update.setString(2, Instant.now().toString()); update.setString(3, mayor.toString());
-                update.setString(4, authority.cityId()); update.executeUpdate();
-            }
-            AuditLog.append(connection, "INDUSTRY_TAX_CHANGED", mayor, "CITY", authority.cityId(), "taxBps=" + taxBps);
-            return null;
-        });
-    }
-
-    public void fundProcurement(UUID mayor, long amountMinor) {
-        if (amountMinor <= 0) throw new IllegalArgumentException("Сумма должна быть положительной");
-        database.transaction(connection -> {
-            Authority authority = requireMayor(connection, mayor);
-            PolicyRow policy = ensurePolicy(connection, authority.cityId(), mayor);
-            String treasury = cityTreasury(connection, authority.cityId());
-            ledger.transfer(connection, "procurement-fund:" + UUID.randomUUID(), treasury,
-                    policy.procurementAccountId(), amountMinor, "Пополнение промышленного закупочного фонда", mayor);
-            AuditLog.append(connection, "PROCUREMENT_FUND_FUNDED", mayor, "CITY", authority.cityId(), "amountMinor=" + amountMinor);
-            return null;
-        });
-    }
-
     public CycleBatch processDue(Instant now) {
         if (!settings.get().enabled()) return new CycleBatch(0, 0, 0);
         List<String> ids = database.transaction(connection -> {
@@ -546,11 +512,12 @@ public final class IndustryService {
         BusinessRow business = business(connection, object.businessId());
         DepositRow deposit = deposit(connection, object.depositId());
         ControllerView controller = controller(connection, object.controllerSerial());
-        PolicyRow policy = ensurePolicy(connection, business.cityId(), null);
         IndustryLevelSettings level = cfg.level(object.level());
         String businessAccount = businessAccount(connection, object.businessId());
         String treasury = cityTreasury(connection, business.cityId());
         String maintenanceSink = ledger.ensureAccount(connection, "SYSTEM", "INDUSTRY_MAINTENANCE", "ESSENTIALS");
+        String stateProcurement = ledger.ensureAccount(connection, "SYSTEM", STATE_PROCUREMENT_ACCOUNT, "ESSENTIALS");
+        String stateRevenue = ledger.ensureAccount(connection, "SYSTEM", STATE_REVENUE_ACCOUNT, "ESSENTIALS");
         long lease = activeLease(connection, object.depositId(), object.businessId());
 
         long debt = object.debtMinor();
@@ -561,7 +528,7 @@ public final class IndustryService {
             debt -= repaidDebt;
         }
 
-        String state = object.status(); String details = ""; long units = 0; long gross = 0;
+        String state = object.status(); String details = ""; long units = 0; long gross = 0; long tax = 0;
         boolean canProduce = !"PAUSED".equals(object.status()) && debt < cfg.debtSuspendMinor();
         if (!"ACTIVE".equals(business.status())) { state = "SUSPENDED_DEBT"; details = "Предприятие не активно"; canProduce = false; }
         else if (!"BOUND".equals(controller.state()) || controller.worldId() == null) { state = "MISSING_CONTROLLER"; details = "Контроллер отсутствует"; canProduce = false; }
@@ -577,30 +544,27 @@ public final class IndustryService {
                 state = "WARNING"; details = "Лимит месторождения на период исчерпан";
             } else {
                 gross = Math.multiplyExact(units, level.pricePerUnitMinor());
-                if (ledger.balance(connection, policy.procurementAccountId()) < gross) {
-                    units = 0; gross = 0; state = "WAITING_BUYER_FUNDS"; details = "В закупочном фонде недостаточно средств";
-                } else {
-                    try (var reserve = connection.prepareStatement("UPDATE resource_deposit SET reserve_remaining=reserve_remaining-?,status=CASE WHEN reserve_remaining-?=0 THEN 'DEPLETED' ELSE status END,updated_at=? WHERE id=? AND reserve_remaining>=?")) {
-                        reserve.setLong(1, units); reserve.setLong(2, units); reserve.setString(3, Instant.now().toString());
-                        reserve.setString(4, object.depositId()); reserve.setLong(5, units);
-                        if (reserve.executeUpdate() != 1) throw new IllegalStateException("Запас месторождения изменился во время расчёта");
-                    }
-                    ledger.transfer(connection, periodKey + ":gross", policy.procurementAccountId(), businessAccount,
-                            gross, "Государственная закупка нефти: " + units + " ед.", null);
-                    state = "ACTIVE"; details = "Добыто и продано " + units + " ед.";
+                tax = Math.floorDiv(Math.multiplyExact(gross, STATE_OIL_SALES_TAX_BPS), 10_000L);
+                long producerPayment = gross - tax;
+                try (var reserve = connection.prepareStatement("UPDATE resource_deposit SET reserve_remaining=reserve_remaining-?,status=CASE WHEN reserve_remaining-?=0 THEN 'DEPLETED' ELSE status END,updated_at=? WHERE id=? AND reserve_remaining>=?")) {
+                    reserve.setLong(1, units); reserve.setLong(2, units); reserve.setString(3, Instant.now().toString());
+                    reserve.setString(4, object.depositId()); reserve.setLong(5, units);
+                    if (reserve.executeUpdate() != 1) throw new IllegalStateException("Запас месторождения изменился во время расчёта");
                 }
+                if (producerPayment > 0) ledger.transfer(connection, periodKey + ":producer-payment", stateProcurement,
+                        businessAccount, producerPayment, "Автоматическая государственная закупка нефти: " + units + " барр.", null);
+                if (tax > 0) ledger.transfer(connection, periodKey + ":state-tax", stateProcurement,
+                        stateRevenue, tax, "Фиксированный налог 20% с продажи нефти", null);
+                state = "ACTIVE"; details = "Добыто и продано государству " + units + " барр.";
             }
         }
 
         long maintenance = level.maintenanceMinor();
-        long tax = gross <= 0 ? 0 : Math.floorDiv(Math.multiplyExact(gross, policy.taxBps()), 10_000L);
         long debtAdded = 0;
         debtAdded += payOrDebt(connection, periodKey + ":maintenance", businessAccount, maintenanceSink,
                 maintenance, "Обслуживание нефтяного объекта");
         debtAdded += payOrDebt(connection, periodKey + ":lease", businessAccount, treasury,
                 lease, "Аренда ресурсного участка");
-        debtAdded += payOrDebt(connection, periodKey + ":tax", businessAccount, treasury,
-                tax, "Промышленный налог");
         debt += debtAdded;
         long net = gross - maintenance - lease - tax;
 
@@ -696,26 +660,6 @@ public final class IndustryService {
                         rs.getLong("lease_minor"), rs.getLong("business_balance"), owner.equals(actor), official || administrator);
             }
         }
-    }
-
-    private PolicyView policy(Connection connection, String cityId, UUID actor) throws Exception {
-        PolicyRow row = ensurePolicy(connection, cityId, actor);
-        long balance = ledger.balance(connection, row.procurementAccountId());
-        return new PolicyView(cityId, row.procurementAccountId(), balance, row.taxBps(), settings.get().maxTaxBps());
-    }
-
-    private PolicyRow ensurePolicy(Connection connection, String cityId, UUID actor) throws Exception {
-        try (var query = connection.prepareStatement("SELECT procurement_account_id,tax_bps FROM city_industry_policy WHERE city_id=?")) {
-            query.setString(1, cityId); try (var rs = query.executeQuery()) {
-                if (rs.next()) return new PolicyRow(rs.getString(1), rs.getInt(2));
-            }
-        }
-        String account = ledger.ensureAccount(connection, "CITY_PROCUREMENT", cityId, "ESSENTIALS");
-        try (var insert = connection.prepareStatement("INSERT INTO city_industry_policy(city_id,procurement_account_id,tax_bps,updated_at,updated_by) VALUES(?,?,?,?,?)")) {
-            insert.setString(1, cityId); insert.setString(2, account); insert.setInt(3, settings.get().defaultTaxBps());
-            insert.setString(4, Instant.now().toString()); insert.setString(5, actor == null ? null : actor.toString()); insert.executeUpdate();
-        }
-        return new PolicyRow(account, settings.get().defaultTaxBps());
     }
 
     private List<DepositView> readDeposits(Connection connection, String cityId, String requestingBusiness) throws Exception {
@@ -859,12 +803,6 @@ public final class IndustryService {
         }
     }
 
-    private Authority requireMayor(Connection connection, UUID player) throws Exception {
-        Authority value = authority(connection, player);
-        if (value == null || value.role() != CityRole.MAYOR) throw new SecurityException("Требуется должность мэра");
-        return value;
-    }
-
     private void requireOfficial(Connection connection, UUID player, String cityId) throws Exception {
         Authority value = authority(connection, player);
         if (value == null || !value.cityId().equals(cityId) || (value.role() != CityRole.MAYOR && value.role() != CityRole.OFFICIAL)) {
@@ -912,7 +850,6 @@ public final class IndustryService {
     private record ObjectRow(String id, String businessId, String depositId, String controllerSerial,
                              Integer level, String status, Instant nextCycleAt, long debtMinor) {}
     private record DepositRow(String id, String cityId, long remaining, long throughput, String status) {}
-    private record PolicyRow(String procurementAccountId, int taxBps) {}
     private record ObjectBatch(int cycles, int produced) {}
 
     public record DepositView(String id, String slug, String name, String cityId, UUID worldId, String worldName,
@@ -928,8 +865,6 @@ public final class IndustryService {
                              Instant submittedAt, Instant nextCycleAt, Instant lastCycleAt, long debtMinor,
                              String lastError, long reserveRemaining, long reserveTotal, long throughputLimit,
                              long leaseMinor, long businessBalanceMinor, boolean owner, boolean official) {}
-    public record PolicyView(String cityId, String procurementAccountId, long procurementBalanceMinor,
-                             int taxBps, int maxTaxBps) {}
     public record CycleView(String id, String objectId, String periodKey, Instant dueAt, String state,
                             long extractedUnits, long grossMinor, long maintenanceMinor, long leaseMinor,
                             long taxMinor, long netMinor, long debtAddedMinor, String details) {}

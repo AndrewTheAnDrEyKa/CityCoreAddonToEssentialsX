@@ -121,11 +121,6 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
     private static IndustrySettings industry(FileConfiguration config, int scale) {
         long cycleSeconds = Math.max(30L, config.getLong("industry.cycle-seconds", 3600L));
         int maxCatchUp = Math.max(1, Math.min(24, config.getInt("industry.max-catch-up-periods", 3)));
-        int defaultTax = config.getInt("industry.default-tax-bps", 500);
-        int maxTax = config.getInt("industry.max-tax-bps", 2500);
-        if (defaultTax < 0 || maxTax < defaultTax || maxTax > 10000) {
-            throw new IllegalArgumentException("industry tax bps должны удовлетворять 0 <= default <= max <= 10000");
-        }
         Material material;
         String materialName = config.getString("industry.controller-material", "LODESTONE");
         try {
@@ -145,7 +140,7 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
                 config.getBoolean("industry.enabled", true), cycleSeconds, maxCatchUp,
                 money(config, "industry.default-lease", "20.00", scale),
                 debtThreshold,
-                defaultTax, maxTax, material, levels
+                material, levels
         );
     }
 

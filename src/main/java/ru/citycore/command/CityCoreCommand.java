@@ -36,7 +36,6 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
                 case "profile" -> Route.PROFILE;
                 case "city" -> Route.CITY;
                 case "business" -> Route.BUSINESS;
-                case "documents" -> Route.LICENSES;
                 default -> Route.HOME;
             };
             gui.open(player, target);
@@ -114,9 +113,10 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
             } catch (IllegalArgumentException invalid) { UiText.error(player, "Формат: /cc city role <UUID> <citizen|official>"); }
             return true;
         }
-        if (args[0].equalsIgnoreCase("business") && args.length >= 4 && args[1].equalsIgnoreCase("register") && sender instanceof Player player) {
-            String name = String.join(" ", java.util.Arrays.copyOfRange(args, 3, args.length));
-            runAsync(player, () -> "Бизнес зарегистрирован: " + businesses.register(player.getUniqueId(), args[2], name).id()); return true;
+        if (args[0].equalsIgnoreCase("business") && args.length >= 2 && args[1].equalsIgnoreCase("register") && sender instanceof Player player) {
+            UiText.info(player, "Направление предприятия теперь выбирается в мастере регистрации.");
+            gui.open(player, Route.BUSINESS);
+            return true;
         }
         if (args[0].equalsIgnoreCase("business") && args.length == 3 && args[1].equalsIgnoreCase("info") && sender instanceof Player player) {
             storage.submit(() -> businesses.detail(player.getUniqueId(), args[2])).whenComplete((business, error) -> sync(player, () -> {

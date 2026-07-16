@@ -610,6 +610,60 @@ public final class CityService {
         });
     }
 
+    /** Aggregated facts for the dedicated city statistics screen. */
+    public CityStats stats(UUID player) {
+        return database.transaction(connection -> {
+            Membership membership = membership(connection, player);
+            if (membership == null) throw new IllegalStateException("Сначала вступите в город");
+            int citizens = 0;
+            int officials = 0;
+            int mayors = 0;
+            try (var query = connection.prepareStatement("""
+                    SELECT COUNT(*) total,
+                           SUM(CASE WHEN role='CITIZEN' THEN 1 ELSE 0 END) citizens,
+                           SUM(CASE WHEN role='OFFICIAL' THEN 1 ELSE 0 END) officials,
+                           SUM(CASE WHEN role='MAYOR' THEN 1 ELSE 0 END) mayors
+                    FROM citizenship WHERE city_id=?
+                    """)) {
+                query.setString(1, membership.cityId());
+                try (var rs = query.executeQuery()) {
+                    if (rs.next()) {
+                        citizens = rs.getInt("citizens");
+                        officials = rs.getInt("officials");
+                        mayors = rs.getInt("mayors");
+                    }
+                }
+            }
+            int activeBusinesses;
+            int pendingBusinesses;
+            try (var query = connection.prepareStatement("""
+                    SELECT SUM(CASE WHEN status='ACTIVE' THEN 1 ELSE 0 END) active_count,
+                           SUM(CASE WHEN status='PENDING' THEN 1 ELSE 0 END) pending_count
+                    FROM business WHERE city_id=?
+                    """)) {
+                query.setString(1, membership.cityId());
+                try (var rs = query.executeQuery()) {
+                    rs.next();
+                    activeBusinesses = rs.getInt("active_count");
+                    pendingBusinesses = rs.getInt("pending_count");
+                }
+            }
+            int industrialObjects;
+            try (var query = connection.prepareStatement("""
+                    SELECT COUNT(*) FROM industrial_object o
+                    JOIN business b ON b.id=o.business_id
+                    WHERE b.city_id=? AND o.status NOT IN ('REJECTED','CANCELLED','DECOMMISSIONED')
+                    """)) {
+                query.setString(1, membership.cityId());
+                try (var rs = query.executeQuery()) {
+                    industrialObjects = rs.next() ? rs.getInt(1) : 0;
+                }
+            }
+            return new CityStats(citizens + officials + mayors, citizens, officials, mayors,
+                    activeBusinesses, pendingBusinesses, industrialObjects);
+        });
+    }
+
     public String treasuryAccount(UUID player) {
         return database.transaction(connection -> {
             Membership membership = membership(connection, player);
@@ -760,6 +814,8 @@ public final class CityService {
     public record PlayerApplication(String id, String citySlug, String cityName, String status, Instant createdAt) {}
     public record Member(UUID playerId, String playerName, CityRole role, Instant joinedAt) {}
     public record CityView(String id, String slug, String name, String status, CityRole role, long treasuryMinor) {}
+    public record CityStats(int population, int citizens, int officials, int mayors,
+                            int activeBusinesses, int pendingBusinesses, int industrialObjects) {}
     public record FoundationApplication(String id, UUID founderId, String founderName, String slug,
                                         String name, String description, String status,
                                         Instant createdAt, Instant decidedAt) {}

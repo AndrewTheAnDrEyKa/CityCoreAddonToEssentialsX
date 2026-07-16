@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'ru.citycore'
-version = '0.1.0-alpha.20.0'
+version = '0.1.0-alpha.21.1'
 
 repositories {
     mavenCentral()
@@ -50,6 +50,10 @@ test {
         junitXml.required = true
         html.required = true
     }
+}
+
+jar {
+    archiveClassifier = 'plain'
 }
 
 shadowJar {

@@ -60,8 +60,8 @@ public final class CityCorePlugin extends JavaPlugin {
             if (!databasePath.startsWith(dataDirectory)) {
                 throw new IllegalArgumentException("database.file должен находиться внутри папки CityCore");
             }
-            Path backup = DatabaseBackup.beforeAlpha20(databasePath, dataDirectory.resolve("backups"));
-            if (backup != null) getLogger().info("Резервная копия перед Alpha 20: " + backup.getFileName());
+            Path backup = DatabaseBackup.beforeAlpha21Hotfix(databasePath, dataDirectory.resolve("backups"));
+            if (backup != null) getLogger().info("Резервная копия перед Alpha 21.1: " + backup.getFileName());
             database = new Database(databasePath, config.poolSize());
             Migrations.apply(database);
             storage = new StorageExecutor();
@@ -115,7 +115,7 @@ public final class CityCorePlugin extends JavaPlugin {
             if (registered == null) throw new IllegalStateException("Команда citycore отсутствует в plugin.yml");
             registered.setExecutor(command); registered.setTabCompleter(command);
             for (String commandName : new String[]{"citycoreadmin", "citycoremayor", "citycoregovernment",
-                    "profile", "city", "business", "documents"}) {
+                    "profile", "city", "business"}) {
                 var shortcut = getCommand(commandName);
                 if (shortcut == null) throw new IllegalStateException("Команда " + commandName + " отсутствует в plugin.yml");
                 shortcut.setExecutor(command);
@@ -251,12 +251,23 @@ public final class CityCorePlugin extends JavaPlugin {
             raw.set("communication.sounds.call-ended", "BLOCK_NOTE_BLOCK_HAT");
             raw.set("communication.sounds.radio-transmit", "BLOCK_NOTE_BLOCK_BIT");
         }
-        if (version >= 6) return;
-        raw.set("config-version", 6);
+        if (version < 7) {
+            // Alpha 21 makes GUI feedback deliberately quiet. Server owners can
+            // still tune or disable every sound after this one-time migration.
+            raw.set("gui.sound-volume", 0.14D);
+        }
+        if (version < 8) {
+            // Oil procurement and the 20% sales deduction are state-level and
+            // automatic in Alpha 21.1. The former mayor-controlled values are ignored.
+            raw.set("industry.default-tax-bps", null);
+            raw.set("industry.max-tax-bps", null);
+        }
+        if (version >= 8) return;
+        raw.set("config-version", 8);
         try {
             raw.save(file);
         } catch (IOException error) {
-            throw new IllegalStateException("Не удалось обновить config.yml до версии 6", error);
+            throw new IllegalStateException("Не удалось обновить config.yml до версии 8", error);
         }
     }
     public CityCoreConfig config() { return config; }

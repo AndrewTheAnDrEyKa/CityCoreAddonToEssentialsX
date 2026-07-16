@@ -17,6 +17,10 @@ public final class DatabaseBackup {
         return beforeVersion(databaseFile, backupDirectory, "alpha20");
     }
 
+    public static Path beforeAlpha21Hotfix(Path databaseFile, Path backupDirectory) {
+        return beforeVersion(databaseFile, backupDirectory, "alpha21.1");
+    }
+
     private static Path beforeVersion(Path databaseFile, Path backupDirectory, String version) {
         if (!Files.isRegularFile(databaseFile)) return null;
         try {

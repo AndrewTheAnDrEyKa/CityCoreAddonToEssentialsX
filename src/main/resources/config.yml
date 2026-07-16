@@ -1,4 +1,4 @@
-config-version: 6
+config-version: 8
 database:
   file: citycore.db
   pool-size: 4
@@ -35,7 +35,7 @@ communication:
       - "102.0"
       - "102.2"
   devices:
-    # В Alpha 20 стартовые устройства выдаются для приёмочного теста.
+    # Стартовые устройства выдаются автоматически и восстанавливаются после респауна.
     issue-starter-phone: true
     issue-starter-radio: true
   sounds:
@@ -50,8 +50,6 @@ industry:
   max-catch-up-periods: 3
   default-lease: "20.00"
   debt-suspend-threshold: "1000.00"
-  default-tax-bps: 500
-  max-tax-bps: 2500
   controller-material: "LODESTONE"
   levels:
     1:
@@ -75,7 +73,7 @@ gui:
   title: "CityCore"
   rows: 6
   sounds: true
-  sound-volume: 0.22
+  sound-volume: 0.14
   sound-open: true
   sound-click: true
   sound-results: true

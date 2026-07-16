@@ -39,6 +39,11 @@ class CityServiceTest {
         assertNotNull(decision.city());
         assertEquals(CityRole.MAYOR, cities.view(founder).role());
         assertEquals(0, cities.view(founder).treasuryMinor());
+        CityService.CityStats stats = cities.stats(founder);
+        assertEquals(1, stats.population());
+        assertEquals(1, stats.mayors());
+        assertEquals(0, stats.activeBusinesses());
+        assertEquals(0, stats.industrialObjects());
         assertTrue(cities.pendingFoundations().isEmpty());
     }
 

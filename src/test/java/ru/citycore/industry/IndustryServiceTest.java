@@ -32,7 +32,7 @@ class IndustryServiceTest {
 
     @Test void fundedCycleConsumesFiniteReserveAndCannotReplay() {
         Setup setup = setup(100, 100);
-        fundTreasuryAndProcurement(200_000, 100_000);
+        fundTreasury(200_000);
         IndustryService.ObjectView object = approvedObject(setup, "SERIAL-A");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
         industry.start(mayor, object.id()); forceDue(object.id(), Instant.now());
@@ -42,7 +42,8 @@ class IndustryServiceTest {
 
         assertEquals(1, first.cycles()); assertEquals(1, first.produced());
         assertEquals(90, after.reserveRemaining());
-        assertEquals(17_750, after.businessBalanceMinor());
+        assertEquals(14_000, after.businessBalanceMinor());
+        assertEquals(5_000, stateOilRevenue());
         assertEquals(1, cycleCount(object.id()));
 
         Instant originalDue = cycleDue(object.id()); forceDue(object.id(), originalDue);
@@ -53,7 +54,7 @@ class IndustryServiceTest {
 
     @Test void twoObjectsShareThroughputAndReserveAtomically() {
         Setup setup = setup(100, 12);
-        fundTreasuryAndProcurement(500_000, 300_000);
+        fundTreasury(500_000);
         IndustryService.ObjectView first = approvedObject(setup, "SERIAL-B1");
         IndustryService.ObjectView second = approvedObject(setup, "SERIAL-B2");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
@@ -66,7 +67,7 @@ class IndustryServiceTest {
         assertEquals(12, extractedTotal());
     }
 
-    @Test void emptyBuyerFundDoesNotConsumeOil() {
+    @Test void stateBuyerPurchasesAutomaticallyAndCollectsFixedTwentyPercent() {
         Setup setup = setup(100, 100);
         IndustryService.ObjectView object = approvedObject(setup, "SERIAL-C");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
@@ -75,8 +76,10 @@ class IndustryServiceTest {
         industry.processDue(Instant.now());
 
         IndustryService.ObjectView after = industry.object(mayor, object.id(), false);
-        assertEquals(100, after.reserveRemaining());
-        assertEquals("WAITING_BUYER_FUNDS", after.status());
+        assertEquals(90, after.reserveRemaining());
+        assertEquals("ACTIVE", after.status());
+        assertEquals(14_000, after.businessBalanceMinor());
+        assertEquals(5_000, stateOilRevenue());
     }
 
     @Test void copiedControllerSerialCannotBePlacedTwice() {
@@ -102,7 +105,7 @@ class IndustryServiceTest {
 
     @Test void missingControllerStopsNextProductionPeriod() {
         Setup setup = setup(100, 100);
-        fundTreasuryAndProcurement(200_000, 100_000);
+        fundTreasury(200_000);
         IndustryService.ObjectView object = approvedObject(setup, "SERIAL-MISSING");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
         industry.start(mayor, object.id()); forceDue(object.id(), Instant.now());
@@ -117,7 +120,7 @@ class IndustryServiceTest {
 
     @Test void expiredLicenseStopsProductionWithoutConsumingReserve() {
         Setup setup = setup(100, 100);
-        fundTreasuryAndProcurement(200_000, 100_000);
+        fundTreasury(200_000);
         IndustryService.ObjectView object = approvedObject(setup, "SERIAL-EXPIRED");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
         industry.start(mayor, object.id());
@@ -162,7 +165,7 @@ class IndustryServiceTest {
 
     @Test void restartCatchUpIsBoundedAndDoesNotReplay() {
         Setup setup = setup(200, 100);
-        fundTreasuryAndProcurement(500_000, 300_000);
+        fundTreasury(500_000);
         IndustryService.ObjectView object = approvedObject(setup, "SERIAL-CATCHUP");
         businesses.issueLicense(mayor, setup.businessId(), "OIL_EXTRACTION_I", 30);
         database.transaction(connection -> {
@@ -192,7 +195,7 @@ class IndustryServiceTest {
         String business = businesses.register(mayor, "oil_business", "Нефтяное предприятие").id();
         businesses.decide(mayor, business, true); businesses.setActivity(mayor, business, "OIL_EXTRACTION");
         IndustrySettings settings = new IndustrySettings(true, 60, 3, 2_000, 100_000,
-                500, 2500, Material.LODESTONE, Map.of(
+                Material.LODESTONE, Map.of(
                 1, new IndustryLevelSettings(10, 2_500, 4_000, 7),
                 2, new IndustryLevelSettings(25, 2_500, 12_000, 30),
                 3, new IndustryLevelSettings(60, 2_500, 36_000, 90)));
@@ -210,10 +213,13 @@ class IndustryServiceTest {
         return industry.inspect(mayor, object.id(), true, 1, "Проверено тестом", false);
     }
 
-    private void fundTreasuryAndProcurement(long treasuryAmount, long procurementAmount) {
+    private void fundTreasury(long treasuryAmount) {
         String system = ledger.ensureAccount("SYSTEM", "TEST_SOURCE", "ESSENTIALS");
         ledger.transfer("test-seed:" + UUID.randomUUID(), system, cities.treasuryAccount(mayor), treasuryAmount, "Тестовый капитал", null);
-        industry.fundProcurement(mayor, procurementAmount);
+    }
+
+    private long stateOilRevenue() {
+        return scalar("SELECT balance_minor FROM account WHERE owner_type='SYSTEM' AND owner_id='STATE_OIL_REVENUE'");
     }
 
     private void forceDue(String objectId, Instant due) {

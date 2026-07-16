@@ -77,6 +77,11 @@ public final class Migrations {
             "CREATE TABLE IF NOT EXISTS communication_event(id TEXT PRIMARY KEY,event_type TEXT NOT NULL,actor_uuid TEXT NOT NULL,peer_uuid TEXT,device_serial TEXT,channel TEXT,details TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(actor_uuid) REFERENCES player_profile(uuid))",
             "CREATE INDEX IF NOT EXISTS idx_communication_actor_created ON communication_event(actor_uuid,created_at)",
             "CREATE INDEX IF NOT EXISTS idx_communication_peer_created ON communication_event(peer_uuid,created_at)"
+    ), List.of(
+            "ALTER TABLE business ADD COLUMN requested_industry_level INTEGER CHECK(requested_industry_level IS NULL OR requested_industry_level BETWEEN 1 AND 3)",
+            "ALTER TABLE business ADD COLUMN application_note TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE business ADD COLUMN review_required INTEGER NOT NULL DEFAULT 1 CHECK(review_required IN (0,1))",
+            "CREATE INDEX IF NOT EXISTS idx_business_review_queue ON business(city_id,review_required,status,created_at)"
     ));
 
     private Migrations() {}

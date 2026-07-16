@@ -9,8 +9,8 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GuiLayoutTest {
-    @Test void homeHasFiveBalancedApplicationSlots() {
-        assertArrayEquals(new int[]{11, 13, 15, 21, 23}, GuiLayout.homeCategorySlots());
+    @Test void homeHasThreeCenteredDomainSlots() {
+        assertArrayEquals(new int[]{20, 22, 24}, GuiLayout.homeCategorySlots());
         for (int slot : GuiLayout.homeCategorySlots()) assertFalse(GuiLayout.isFrameSlot(slot));
     }
 
@@ -20,14 +20,14 @@ class GuiLayoutTest {
         assertTrue(frame.contains(GuiLayout.BACK_SLOT));
         assertTrue(frame.contains(GuiLayout.HOME_SLOT));
         assertTrue(frame.contains(GuiLayout.CLOSE_SLOT));
-        assertEquals(18, frame.size());
+        assertEquals(26, frame.size());
     }
 
-    @Test void frameIsTopAndFooterWithoutSideClutter() {
+    @Test void frameProtectsTopFooterAndBothSides() {
         for (int slot = 0; slot <= 8; slot++) assertTrue(GuiLayout.isFrameSlot(slot));
         for (int row = 1; row <= 4; row++) {
-            assertFalse(GuiLayout.isFrameSlot(row * 9));
-            assertFalse(GuiLayout.isFrameSlot(row * 9 + 8));
+            assertTrue(GuiLayout.isFrameSlot(row * 9));
+            assertTrue(GuiLayout.isFrameSlot(row * 9 + 8));
         }
         for (int slot = 45; slot <= 53; slot++) assertTrue(GuiLayout.isFrameSlot(slot));
     }

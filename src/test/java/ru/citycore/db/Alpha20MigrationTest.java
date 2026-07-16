@@ -55,7 +55,7 @@ class Alpha20MigrationTest {
             try (var versions = connection.createStatement();
                  var result = versions.executeQuery("SELECT MAX(version) FROM schema_history")) {
                 assertTrue(result.next());
-                assertEquals(6, result.getInt(1));
+                assertEquals(Migrations.latestVersion(), result.getInt(1));
             }
             return null;
         });

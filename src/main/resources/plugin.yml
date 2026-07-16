@@ -38,11 +38,6 @@ commands:
     description: Открыть предприятия CityCore
     usage: /business
     permission: citycore.use
-  documents:
-    aliases: [dc]
-    description: Открыть документы и лицензии CityCore
-    usage: /documents
-    permission: citycore.use
   phone:
     aliases: [ph]
     description: Открыть телефон или позвонить игроку

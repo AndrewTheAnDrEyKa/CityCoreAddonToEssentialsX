@@ -8,6 +8,8 @@ import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import ru.citycore.CityCorePlugin;
+import ru.citycore.gui.GuiIcon;
+import ru.citycore.gui.GuiIconRegistry;
 
 import java.util.List;
 import java.util.Locale;
@@ -16,15 +18,18 @@ import java.util.Locale;
 public final class DeviceItems {
     private final NamespacedKey typeKey;
     private final NamespacedKey serialKey;
+    private final GuiIconRegistry icons;
 
     public DeviceItems(CityCorePlugin plugin) {
         typeKey = new NamespacedKey(plugin, "device_type");
         serialKey = new NamespacedKey(plugin, "device_serial");
+        icons = new GuiIconRegistry(() -> plugin.config().customHeads());
     }
 
     public ItemStack create(Device device) {
-        Material material = device.type() == DeviceType.PHONE ? Material.CLOCK : Material.SPYGLASS;
-        ItemStack item = new ItemStack(material);
+        ItemStack item = device.type() == DeviceType.PHONE
+                ? new ItemStack(Material.CLOCK)
+                : icons.create(GuiIcon.RADIO);
         item.editMeta(meta -> {
             NamedTextColor color = device.type() == DeviceType.PHONE ? NamedTextColor.AQUA : NamedTextColor.GOLD;
             meta.displayName(text(device.type() == DeviceType.PHONE ? "Кнопочный телефон" : "Полевая рация", color));
@@ -42,7 +47,7 @@ public final class DeviceItems {
                         text("Канал: " + device.lastChannel(), NamedTextColor.WHITE),
                         Component.empty(),
                         text("ПКМ  ›  включить или выключить", NamedTextColor.DARK_GRAY),
-                        text("Shift + ПКМ  ›  меню связи", NamedTextColor.DARK_GRAY)
+                        text("Shift + ПКМ  ›  частоты рации", NamedTextColor.DARK_GRAY)
                 ));
             }
             meta.getPersistentDataContainer().set(typeKey, PersistentDataType.STRING, device.type().name());
