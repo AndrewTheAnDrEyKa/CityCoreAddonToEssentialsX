@@ -24,6 +24,11 @@ import ru.citycore.permission.Capability;
 import ru.citycore.permission.CapabilityService;
 import ru.citycore.industry.IndustryService;
 import ru.citycore.industry.ControllerItems;
+import ru.citycore.communication.CallSession;
+import ru.citycore.communication.CallState;
+import ru.citycore.communication.CommunicationService;
+import ru.citycore.communication.Device;
+import ru.citycore.communication.DeviceType;
 
 import java.time.Instant;
 import java.time.ZoneId;
@@ -53,6 +58,7 @@ public final class GuiService {
     private final RoleMirror roleMirror;
     private final IndustryService industry;
     private final ControllerItems controllerItems;
+    private final CommunicationService communication;
     private final CapabilityService capabilities = new CapabilityService();
     private final GuiIconRegistry icons;
     private final NamespacedKey actionKey;
@@ -71,13 +77,13 @@ public final class GuiService {
                       BusinessService businesses, ChatPromptService prompts, GuiFeedback feedback,
                       VaultTransferCoordinator vaultTransfers, EmissionService emission, RoleMirror roleMirror) {
         this(plugin, economy, storage, cities, businesses, prompts, feedback, vaultTransfers, emission,
-                roleMirror, null, null);
+                roleMirror, null, null, null);
     }
 
     public GuiService(CityCorePlugin plugin, EconomyGateway economy, StorageExecutor storage, CityService cities,
                       BusinessService businesses, ChatPromptService prompts, GuiFeedback feedback,
                       VaultTransferCoordinator vaultTransfers, EmissionService emission, RoleMirror roleMirror,
-                      IndustryService industry, ControllerItems controllerItems) {
+                      IndustryService industry, ControllerItems controllerItems, CommunicationService communication) {
         this.plugin = plugin;
         this.economy = economy;
         this.storage = storage;
@@ -90,6 +96,7 @@ public final class GuiService {
         this.roleMirror = roleMirror;
         this.industry = industry;
         this.controllerItems = controllerItems;
+        this.communication = communication;
         this.actionKey = new NamespacedKey(plugin, "gui_action");
         this.icons = new GuiIconRegistry(() -> plugin.config().customHeads());
     }
@@ -158,7 +165,7 @@ public final class GuiService {
     }
 
     private void render(Player player, Route route, Inventory inventory) {
-        decorate(inventory);
+        decorate(inventory, route);
         switch (route) {
             case HOME -> renderHome(player, inventory);
             case PROFILE -> renderProfile(player, inventory);
@@ -172,6 +179,9 @@ public final class GuiService {
             case BUSINESS_DETAIL -> renderBusinessDetail(player, inventory);
             case LICENSES -> renderLicenses(player, inventory);
             case ECONOMY -> renderEconomy(player, inventory);
+            case COMMUNICATIONS -> renderCommunications(player, inventory);
+            case PHONE_DEVICE -> renderPhoneDevice(player, inventory);
+            case RADIO_CHANNELS -> renderRadioChannels(player, inventory);
             case MAYOR -> renderMayor(player, inventory);
             case GOVERNMENT -> renderGovernment(player, inventory);
             case ADMIN -> renderAdmin(player, inventory);
@@ -200,14 +210,30 @@ public final class GuiService {
     private void renderHome(Player player, Inventory inventory) {
         int[] slots = GuiLayout.homeCategorySlots();
         inventory.setItem(slots[0], playerHead(player.getUniqueId(), "Личное", "route:PROFILE",
-                "Ваш профиль, статус и личный кошелёк",
-                "Без городских и служебных действий"));
+                "Профиль, статус и личный кошелёк",
+                "Только ваши данные и настройки"));
         inventory.setItem(slots[1], button(GuiIcon.CITY, "Город", "route:CITY",
-                "Гражданство, должность и городской статус",
-                "Здесь находятся вступление, выход и отставка"));
-        inventory.setItem(slots[2], button(GuiIcon.ECONOMY, "Экономика", "route:ECONOMY",
-                "Предприятия, счета организаций и отрасли",
-                "Личный кошелёк здесь не дублируется"));
+                "Гражданство, жители и городские решения",
+                "Управление появляется только при должности"));
+        inventory.setItem(slots[2], button(GuiIcon.BUSINESS, "Предприятия", "route:BUSINESS",
+                "Компании, финансы, лицензии и объекты",
+                "Рабочие действия находятся в карточке компании"));
+        inventory.setItem(slots[3], button(GuiIcon.DOCUMENTS, "Документы", "route:LICENSES",
+                "Действующие разрешения предприятий",
+                "Заявления и новые документы будут добавляться здесь"));
+        inventory.setItem(slots[4], button(GuiIcon.COMMUNICATIONS, "Связь", "route:COMMUNICATIONS",
+                "Телефонные звонки и двенадцать радиоканалов",
+                "Обычная речь остаётся локальной"));
+        if (communication != null) {
+            String radio = communication.radioEnabled(player.getUniqueId())
+                    ? "Рация: включена · " + communication.channel(player.getUniqueId()) : "Рация: выключена";
+            CallSession call = communication.call(player.getUniqueId());
+            String phone = call == null ? "Телефон: свободен"
+                    : call.state() == CallState.CONNECTED ? "Телефон: идёт разговор" : "Телефон: входящий/исходящий звонок";
+            inventory.setItem(40, info(GuiIcon.STATUS, "Состояние связи", phone, radio,
+                    "Речь: " + trimRadius(plugin.config().communication().speechRadius()) + " блоков · крик: "
+                            + trimRadius(plugin.config().communication().shoutRadius()) + " блоков"));
+        }
     }
 
     private void renderProfile(Player player, Inventory inventory) {
@@ -268,6 +294,15 @@ public final class GuiService {
                     List<ItemStack> actions = new ArrayList<>();
                     actions.add(button(GuiIcon.RESIDENTS, "Жители города", "route:CITY_MEMBERS",
                             "Посмотреть население и должности"));
+                    if (city.role() == CityRole.MAYOR) {
+                        actions.add(button(GuiIcon.MAYOR, "Управление городом", "route:MAYOR",
+                                "Заявления, должности, экономика и промышленность",
+                                "Рабочие права проверяются при каждом действии"));
+                    } else if (city.role() == CityRole.OFFICIAL) {
+                        actions.add(button(GuiIcon.GOVERNMENT, "Рабочий стол чиновника", "route:GOVERNMENT",
+                                "Регистрации, лицензии и промышленные осмотры",
+                                "Доступ определяется городской должностью"));
+                    }
                     if (!data.transfers().isEmpty()) actions.add(button(GuiIcon.MAYOR,
                             "Предложение стать мэром", "route:MAYOR_TRANSFER_INBOX",
                             "Принять или отклонить передачу поста"));
@@ -553,6 +588,105 @@ public final class GuiService {
                             "Счёт появится после одобрения предприятия"));
                     else putCentered(inventory, 3, owned);
                 }));
+    }
+
+    private void renderCommunications(Player player, Inventory inventory) {
+        if (communication == null) {
+            inventory.setItem(22, disabled(GuiIcon.COMMUNICATIONS, "Связь недоступна",
+                    "Коммуникационный модуль не был подключён при запуске"));
+            return;
+        }
+        Device phone = communication.devices().active(player.getUniqueId(), DeviceType.PHONE).orElse(null);
+        Device radio = communication.devices().active(player.getUniqueId(), DeviceType.RADIO).orElse(null);
+        if (phone == null) inventory.setItem(11, disabled(GuiIcon.PHONE, "Телефон не выдан",
+                "Перезайдите на сервер или обратитесь в поддержку"));
+        else inventory.setItem(11, button(GuiIcon.PHONE, phone.model(), "route:PHONE_DEVICE",
+                "Номер: " + phone.phoneNumber(), "Состояние: " + statusLabel(phone.state())));
+
+        CallSession call = communication.call(player.getUniqueId());
+        if (call == null) {
+            inventory.setItem(13, button(GuiIcon.CALL, "Позвонить игроку", "phone_call_prompt",
+                    "Адресат должен быть онлайн и иметь телефон",
+                    "Во время разговора речь также слышна рядом"));
+        } else if (call.state() == CallState.RINGING && call.targetId().equals(player.getUniqueId())) {
+            String caller = playerName(call.callerId());
+            inventory.setItem(12, button(GuiIcon.CONFIRM, "Принять звонок", "phone_accept",
+                    "Входящий звонок от " + caller));
+            inventory.setItem(14, button(GuiIcon.CANCEL, "Отклонить звонок", "phone_decline",
+                    "Соединение не будет установлено"));
+        } else {
+            String partner = playerName(call.partner(player.getUniqueId()));
+            inventory.setItem(13, button(GuiIcon.CANCEL,
+                    call.state() == CallState.CONNECTED ? "Завершить разговор" : "Отменить звонок",
+                    "phone_hangup", "Собеседник: " + partner,
+                    "Состояние: " + (call.state() == CallState.CONNECTED ? "соединено" : "ожидание ответа")));
+        }
+
+        if (radio == null) inventory.setItem(15, disabled(GuiIcon.RADIO, "Рация не выдана",
+                "Перезайдите на сервер или обратитесь в поддержку"));
+        else inventory.setItem(15, button(GuiIcon.RADIO, radio.model(), "route:RADIO_CHANNELS",
+                "Канал: " + communication.channel(player.getUniqueId()),
+                "Передача: " + (communication.radioEnabled(player.getUniqueId()) ? "включена" : "выключена")));
+
+        if (radio != null) {
+            inventory.setItem(21, button(communication.radioEnabled(player.getUniqueId()) ? Material.REDSTONE_TORCH : Material.LEVER,
+                    communication.radioEnabled(player.getUniqueId()) ? "Выключить рацию" : "Включить рацию",
+                    "radio_toggle", "Сообщения идут в эфир и слышны поблизости",
+                    "Телефонный звонок имеет приоритет"));
+            inventory.setItem(23, button(GuiIcon.SETTINGS, "Выбрать канал", "route:RADIO_CHANNELS",
+                    "Текущий: " + communication.channel(player.getUniqueId()),
+                    "Доступно каналов: " + communication.channels().size()));
+        }
+        inventory.setItem(31, info(GuiIcon.COMMUNICATIONS, "Локальная речь",
+                "Обычная речь: " + trimRadius(plugin.config().communication().speechRadius()) + " блоков",
+                "Крик с «" + plugin.config().communication().shoutPrefix() + "»: "
+                        + trimRadius(plugin.config().communication().shoutRadius()) + " блоков",
+                "Рация и телефон добавляют удалённого получателя"));
+    }
+
+    private void renderPhoneDevice(Player player, Inventory inventory) {
+        if (communication == null) return;
+        Device phone = communication.devices().active(player.getUniqueId(), DeviceType.PHONE).orElse(null);
+        if (phone == null) {
+            inventory.setItem(22, disabled(GuiIcon.PHONE, "Телефон не зарегистрирован",
+                    "Автоматическая выдача не завершилась"));
+            return;
+        }
+        inventory.setItem(13, info(GuiIcon.PHONE, "Кнопочный телефон",
+                "Модель: " + phone.model(), "Номер: " + phone.phoneNumber(),
+                "Серийный номер: " + shorten(phone.serial(), 18), "Состояние: " + statusLabel(phone.state())));
+        CallSession call = communication.call(player.getUniqueId());
+        if (call == null) inventory.setItem(22, button(GuiIcon.CALL, "Новый звонок", "phone_call_prompt",
+                "Введите имя игрока после закрытия меню"));
+        else inventory.setItem(22, button(GuiIcon.CANCEL,
+                call.state() == CallState.CONNECTED ? "Завершить звонок" : "Отменить звонок", "phone_hangup",
+                "Собеседник: " + playerName(call.partner(player.getUniqueId()))));
+        inventory.setItem(31, info(GuiIcon.DOCUMENTS, "Быстрые команды",
+                "/ph <игрок> — позвонить", "/pha — принять", "/phd — отклонить", "/phh — завершить"));
+    }
+
+    private void renderRadioChannels(Player player, Inventory inventory) {
+        if (communication == null) return;
+        Device radio = communication.devices().active(player.getUniqueId(), DeviceType.RADIO).orElse(null);
+        if (radio == null) {
+            inventory.setItem(22, disabled(GuiIcon.RADIO, "Рация не зарегистрирована",
+                    "Автоматическая выдача не завершилась"));
+            return;
+        }
+        String selected = communication.channel(player.getUniqueId());
+        int[] slots = {10, 11, 12, 13, 14, 15, 16, 20, 21, 22, 23, 24, 25, 29, 30, 31, 32, 33};
+        List<String> channels = communication.channels();
+        for (int index = 0; index < channels.size() && index < slots.length; index++) {
+            String channel = channels.get(index);
+            boolean active = channel.equals(selected);
+            inventory.setItem(slots[index], button(active ? Material.LIME_CONCRETE : Material.LIGHT_BLUE_CONCRETE,
+                    (active ? "● " : "") + channel, "radio_channel:" + channel,
+                    active ? "Текущий канал" : "Переключить рацию на этот канал",
+                    "Команда: /rf " + channel));
+        }
+        inventory.setItem(40, button(communication.radioEnabled(player.getUniqueId()) ? Material.REDSTONE_TORCH : Material.LEVER,
+                communication.radioEnabled(player.getUniqueId()) ? "Выключить передачу" : "Включить передачу",
+                "radio_toggle", "Активный канал: " + selected));
     }
 
     private void renderMayor(Player player, Inventory inventory) {
@@ -1049,11 +1183,11 @@ public final class GuiService {
                     "Вернитесь назад и выберите его ещё раз"));
             return;
         }
-        inventory.setItem(10, info(GuiIcon.DOCUMENTS, confirmation.title(), confirmation.description(),
+        inventory.setItem(13, info(GuiIcon.DOCUMENTS, confirmation.title(), confirmation.description(),
                 "Перед выполнением права и состояние проверятся снова"));
-        inventory.setItem(19, button(GuiIcon.CONFIRM, confirmation.confirmLabel(), "confirm:run",
+        inventory.setItem(21, button(GuiIcon.CONFIRM, confirmation.confirmLabel(), "confirm:run",
                 "Подтвердить действие"));
-        inventory.setItem(20, button(GuiIcon.CANCEL, "Отменить", "confirm:cancel",
+        inventory.setItem(23, button(GuiIcon.CANCEL, "Отменить", "confirm:cancel",
                 "Вернуться без изменений"));
     }
 
@@ -1094,6 +1228,29 @@ public final class GuiService {
         } else if (action.startsWith("command:")) {
             player.closeInventory();
             player.performCommand("cc " + action.substring(8));
+        } else if (action.equals("phone_call_prompt")) {
+            if (communication == null) return;
+            prompts.beginValidated(player, "Введите точное имя игрока для звонка:", value -> {
+                String name = value.strip();
+                if (!name.matches("[A-Za-z0-9_]{3,16}")) {
+                    throw new IllegalArgumentException("Имя игрока: 3–16 символов, латиница, цифры и _. Пример: PuperSuperYT");
+                }
+                return name;
+            }, name -> runCommunication(player, () -> communication.startCall(player, name), Route.COMMUNICATIONS));
+        } else if (action.equals("phone_accept")) {
+            if (communication != null) runCommunication(player, () -> communication.accept(player), Route.COMMUNICATIONS);
+        } else if (action.equals("phone_decline")) {
+            if (communication != null) runCommunication(player, () -> communication.decline(player), Route.COMMUNICATIONS);
+        } else if (action.equals("phone_hangup")) {
+            if (communication != null) runCommunication(player, () -> communication.hangup(player), Route.COMMUNICATIONS);
+        } else if (action.equals("radio_toggle")) {
+            if (communication != null) runCommunication(player, () -> communication.toggleRadio(player), current);
+        } else if (action.startsWith("radio_channel:")) {
+            if (communication != null) {
+                String channel = action.substring("radio_channel:".length());
+                try { communication.setChannel(player, channel); }
+                catch (RuntimeException error) { feedback.failure(player); UiText.error(player, rootMessage(error)); }
+            }
         } else if (action.startsWith("city_apply:")) {
             String slug = action.substring("city_apply:".length());
             confirm(player, "Заявление в город «" + slug + "»",
@@ -1384,16 +1541,19 @@ public final class GuiService {
                 }
             });
         } else if (action.equals("prompt:city_foundation")) {
-            prompts.begin(player, "Придумайте системный ID города (a-z, 0-9, _ или -):", slug ->
-                    prompts.begin(player, "Введите отображаемое название города:", name ->
-                            prompts.begin(player, "Кратко опишите идею города (8–180 символов):", description -> execute(player,
+            prompts.beginValidated(player, "Шаг 1/3 · ID города: 3–24 символа, a-z, 0-9, _ или -. Пример: north_harbor", this::systemId, slug ->
+                    prompts.beginValidated(player, "Шаг 2/3 · Отображаемое название города: 3–32 символа.",
+                            value -> boundedText(value, 3, 32, "Название города"), name ->
+                            prompts.beginValidated(player, "Шаг 3/3 · Кратко опишите идею города: 8–180 символов.",
+                                    value -> boundedText(value, 8, 180, "Описание города"), description -> execute(player,
                                     () -> {
                                         cities.submitFoundation(player.getUniqueId(), slug, name, description);
                                         return "Заявка на основание города «" + name + "» отправлена администрации.";
                                     }, Route.CITY))));
         } else if (action.equals("prompt:business_register")) {
-            prompts.begin(player, "Придумайте системный ID предприятия:", slug ->
-                    prompts.begin(player, "Введите название предприятия:", name -> execute(player,
+            prompts.beginValidated(player, "Шаг 1/2 · ID предприятия: 3–24 символа, a-z, 0-9, _ или -.", this::systemId, slug ->
+                    prompts.beginValidated(player, "Шаг 2/2 · Название предприятия: 3–48 символов.",
+                            value -> boundedText(value, 3, 48, "Название предприятия"), name -> execute(player,
                             () -> { businesses.register(player.getUniqueId(), slug, name); return "Заявка на регистрацию отправлена."; }, Route.BUSINESS)));
         } else if (action.equals("prompt:treasury_deposit")) {
             prompts.begin(player, "Введите сумму пополнения городской казны:", value -> {
@@ -1518,7 +1678,19 @@ public final class GuiService {
                 UiText.success(player, message);
                 navigate(player, returnRoute);
             }
-        }));
+                }));
+    }
+
+    private void runCommunication(Player player, Runnable operation, Route returnRoute) {
+        try {
+            operation.run();
+            if (player.isOnline() && player.getOpenInventory().getTopInventory().getHolder(false) instanceof CityCoreHolder) {
+                navigate(player, returnRoute);
+            }
+        } catch (RuntimeException error) {
+            feedback.failure(player);
+            UiText.error(player, rootMessage(error));
+        }
     }
 
     private Route backRoute(Player player, Route route) {
@@ -1531,6 +1703,8 @@ public final class GuiService {
             case HOME -> Route.HOME;
             case CITY_DIRECTORY, CITY_APPLICATIONS, CITY_MEMBERS -> Route.CITY;
             case CITY_APPLICATION_DETAIL -> Route.CITY_APPLICATIONS;
+            case PHONE_DEVICE, RADIO_CHANNELS -> Route.COMMUNICATIONS;
+            case COMMUNICATIONS -> Route.HOME;
             case BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES -> Route.BUSINESS;
             case CITY_FOUNDATIONS_ADMIN, EMISSION -> Route.ADMIN;
             case CITY_FOUNDATION_DETAIL -> Route.CITY_FOUNDATIONS_ADMIN;
@@ -1666,16 +1840,45 @@ public final class GuiService {
                 "Повторите попытку или передайте сообщение администратору");
     }
 
-    private void decorate(Inventory inventory) {
+    private void decorate(Inventory inventory, Route route) {
         ItemStack dark = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
         dark.editMeta(meta -> meta.displayName(Component.empty()));
-        ItemStack gray = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+        ItemStack gray = new ItemStack(Material.BLUE_STAINED_GLASS_PANE);
         gray.editMeta(meta -> meta.displayName(Component.empty()));
         for (int slot : GuiLayout.frameSlots()) {
-            inventory.setItem(slot, (slot % 2 == 0) ? dark : gray);
+            inventory.setItem(slot, (slot == 4 || slot == GuiLayout.BACK_SLOT || slot == GuiLayout.HOME_SLOT
+                    || slot == GuiLayout.CLOSE_SLOT) ? dark : (slot % 2 == 0 ? dark : gray));
         }
-        inventory.setItem(4, info(GuiIcon.BRAND, "CityCore",
-                "Техническая панель проекта", "Рабочие разделы и проверенные действия"));
+        inventory.setItem(4, info(headerIcon(route), sectionLabel(route),
+                "Единый интерфейс CityCore", "Доступ и состояние проверяются при каждом действии"));
+    }
+
+    private GuiIcon headerIcon(Route route) {
+        return switch (route) {
+            case HOME, PROFILE -> GuiIcon.BRAND;
+            case CITY, CITY_DIRECTORY, CITY_APPLICATIONS, CITY_APPLICATION_DETAIL, CITY_MEMBERS,
+                    MAYOR, MAYOR_TRANSFER, MAYOR_TRANSFER_INBOX, INDUSTRY_POLICY -> GuiIcon.CITY;
+            case BUSINESS, BUSINESS_DETAIL, BUSINESS_PENDING, LICENSES, ECONOMY, LICENSE_TYPE,
+                    LICENSE_DURATION -> GuiIcon.BUSINESS;
+            case COMMUNICATIONS, PHONE_DEVICE, RADIO_CHANNELS -> GuiIcon.COMMUNICATIONS;
+            case ADMIN, CITY_FOUNDATIONS_ADMIN, CITY_FOUNDATION_DETAIL, EMISSION,
+                    MAYOR_RESIGNATIONS_ADMIN, MAYOR_VACANCIES_ADMIN, MAYOR_APPOINT_ADMIN,
+                    INDUSTRY_DEPOSITS -> GuiIcon.ADMIN;
+            case GOVERNMENT, INDUSTRY_INSPECTIONS -> GuiIcon.GOVERNMENT;
+            case INDUSTRY_BUSINESS, INDUSTRY_CONTROLLER, INDUSTRY_DEPOSIT_PICK, INDUSTRY_OBJECT -> GuiIcon.INDUSTRY;
+            case CONFIRM -> GuiIcon.DOCUMENTS;
+        };
+    }
+
+    private String sectionLabel(Route route) {
+        return switch (route) {
+            case HOME -> "CityCore · Центр игрока";
+            case COMMUNICATIONS, PHONE_DEVICE, RADIO_CHANNELS -> "CityCore · Связь";
+            case ADMIN, CITY_FOUNDATIONS_ADMIN, CITY_FOUNDATION_DETAIL, EMISSION,
+                    MAYOR_RESIGNATIONS_ADMIN, MAYOR_VACANCIES_ADMIN, MAYOR_APPOINT_ADMIN,
+                    INDUSTRY_DEPOSITS -> "CityCore · Управление системой";
+            default -> title(null, route);
+        };
     }
 
     private void clearList(Inventory inventory) {
@@ -1702,12 +1905,38 @@ public final class GuiService {
         return MinorUnits.format(amount, plugin.config().currencyScale()) + " мон.";
     }
 
+    private String playerName(UUID playerId) {
+        Player online = Bukkit.getPlayer(playerId);
+        return online == null ? Bukkit.getOfflinePlayer(playerId).getName() == null
+                ? playerId.toString().substring(0, 8) : Bukkit.getOfflinePlayer(playerId).getName() : online.getName();
+    }
+
+    private String trimRadius(double radius) {
+        return radius == Math.rint(radius) ? Long.toString(Math.round(radius)) : Double.toString(radius);
+    }
+
     private long positiveMoney(String value) {
         long result;
         try { result = MinorUnits.parse(value, plugin.config().currencyScale()); }
         catch (RuntimeException invalid) { throw new IllegalArgumentException("Введите положительную сумму, например 100.00"); }
         if (result <= 0) throw new IllegalArgumentException("Сумма должна быть положительной.");
         return result;
+    }
+
+    private String systemId(String value) {
+        String normalized = value == null ? "" : value.strip().toLowerCase(Locale.ROOT);
+        if (!normalized.matches("[a-z0-9][a-z0-9_-]{2,23}")) {
+            throw new IllegalArgumentException("ID: 3–24 символа; первый символ — буква или цифра; разрешены a-z, 0-9, _ и -. Пример: north_harbor");
+        }
+        return normalized;
+    }
+
+    private String boundedText(String value, int minimum, int maximum, String label) {
+        String normalized = value == null ? "" : value.strip();
+        if (normalized.length() < minimum || normalized.length() > maximum) {
+            throw new IllegalArgumentException(label + ": от " + minimum + " до " + maximum + " символов. Сейчас: " + normalized.length() + ".");
+        }
+        return normalized;
     }
 
     private int positiveInt(String value, int minimum, int maximum, String label) {
@@ -1810,6 +2039,9 @@ public final class GuiService {
             case BUSINESS_DETAIL -> "CityCore · Карточка предприятия";
             case LICENSES -> "CityCore · Лицензии";
             case ECONOMY -> "CityCore · Финансы";
+            case COMMUNICATIONS -> "CityCore · Связь";
+            case PHONE_DEVICE -> "CityCore · Телефон";
+            case RADIO_CHANNELS -> "CityCore · Каналы рации";
             case MAYOR -> "CityCore · Мэрия";
             case GOVERNMENT -> "CityCore · Госструктуры";
             case ADMIN -> "CityCore · Администрирование";

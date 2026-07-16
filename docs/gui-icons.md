@@ -1,4 +1,4 @@
-# Семантические иконки Alpha 19
+# Семантические иконки Alpha 20
 
 Основной реестр: `ru.citycore.gui.GuiIcon`. Все иконки имеют ванильный fallback. Цветные головы включаются параметром `gui.custom-heads` и не требуют ресурспака.
 
@@ -11,6 +11,10 @@
 | Предприятие | Chest with Gold Coins | `CHEST` |
 | Заявление | Mailbox | `WRITABLE_BOOK` |
 | Документы | Box of Documents | `BOOK` |
+| Связь | Mailbox | `PAPER` |
+| Телефон | — | `CLOCK` |
+| Звонок | — | `GOAT_HORN` |
+| Рация | — | `SPYGLASS` |
 | Мэрия | Crown | `GOLDEN_HELMET` |
 | Госструктуры | Shield | `SHIELD` |
 | Администрирование | Gear | `COMMAND_BLOCK` |

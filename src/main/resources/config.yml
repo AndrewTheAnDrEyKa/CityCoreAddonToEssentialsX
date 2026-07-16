@@ -1,4 +1,4 @@
-config-version: 5
+config-version: 6
 database:
   file: citycore.db
   pool-size: 4
@@ -8,6 +8,42 @@ economy:
   emission-max-amount: "1000000.00"
 citizenship:
   reapply-cooldown-seconds: 86400
+communication:
+  local-chat:
+    enabled: true
+    speech-radius: 10.0
+    shout-radius: 20.0
+    shout-prefix: "!"
+  phone:
+    enabled: true
+    call-timeout-seconds: 30
+    call-cooldown-seconds: 4
+  radio:
+    enabled: true
+    default-channel: "100.0"
+    channels:
+      - "100.0"
+      - "100.2"
+      - "100.4"
+      - "100.6"
+      - "100.8"
+      - "101.0"
+      - "101.2"
+      - "101.4"
+      - "101.6"
+      - "101.8"
+      - "102.0"
+      - "102.2"
+  devices:
+    # В Alpha 20 стартовые устройства выдаются для приёмочного теста.
+    issue-starter-phone: true
+    issue-starter-radio: true
+  sounds:
+    volume: 0.18
+    ringtone: "BLOCK_NOTE_BLOCK_BELL"
+    call-connected: "BLOCK_AMETHYST_BLOCK_CHIME"
+    call-ended: "BLOCK_NOTE_BLOCK_HAT"
+    radio-transmit: "BLOCK_NOTE_BLOCK_BIT"
 industry:
   enabled: true
   cycle-seconds: 3600

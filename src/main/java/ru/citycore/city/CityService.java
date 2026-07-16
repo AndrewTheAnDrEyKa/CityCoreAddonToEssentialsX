@@ -708,11 +708,23 @@ public final class CityService {
                 if (!rs.next()) return;
                 Instant allowed = Instant.parse(rs.getString(1)).plusSeconds(seconds);
                 if (allowed.isAfter(Instant.now())) {
-                    long minutes = Math.max(1, Duration.between(Instant.now(), allowed).toMinutes());
-                    throw new IllegalStateException("Повторное вступление будет доступно примерно через " + minutes + " мин.");
+                    long remaining = Math.max(1, Duration.between(Instant.now(), allowed).toSeconds());
+                    throw new IllegalStateException("Повторное вступление будет доступно через " + humanDuration(remaining) + ".");
                 }
             }
         }
+    }
+
+    static String humanDuration(long totalSeconds) {
+        long safe = Math.max(1, totalSeconds);
+        long days = safe / 86_400;
+        long hours = (safe % 86_400) / 3_600;
+        long minutes = Math.max(1, (safe % 3_600 + 59) / 60);
+        List<String> parts = new ArrayList<>();
+        if (days > 0) parts.add(days + " д");
+        if (hours > 0) parts.add(hours + " ч");
+        if (days == 0 && minutes > 0) parts.add(minutes + " мин");
+        return String.join(" ", parts);
     }
 
     private void appendMembershipEvent(java.sql.Connection connection, UUID player, String cityId,

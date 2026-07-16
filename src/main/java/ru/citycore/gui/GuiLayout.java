@@ -6,10 +6,12 @@ import java.util.List;
 /** Stable geometry shared by every CityCore inventory screen. */
 public final class GuiLayout {
     public static final int SIZE = 54;
-    public static final int BACK_SLOT = 48;
+    public static final int BACK_SLOT = 45;
+    public static final int PREVIOUS_SLOT = 48;
     public static final int HOME_SLOT = 49;
-    public static final int CLOSE_SLOT = 50;
-    private static final int[] HOME_CATEGORY_SLOTS = {21, 22, 23};
+    public static final int NEXT_SLOT = 50;
+    public static final int CLOSE_SLOT = 53;
+    private static final int[] HOME_CATEGORY_SLOTS = {11, 13, 15, 21, 23};
 
     private static final int[] CONTENT_SLOTS = {
             10, 11, 12, 13, 14, 15, 16,
@@ -27,7 +29,7 @@ public final class GuiLayout {
         if (slot < 0 || slot >= SIZE) return false;
         int row = slot / 9;
         int column = slot % 9;
-        return row == 0 || (row >= 1 && row <= 4 && (column == 0 || column == 8));
+        return row == 0 || row == 5;
     }
 
     public static int[] frameSlots() {

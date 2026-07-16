@@ -5,6 +5,8 @@ import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.configuration.file.YamlConfiguration;
 import ru.citycore.command.CityCoreCommand;
+import ru.citycore.command.PhoneCommand;
+import ru.citycore.command.RadioCommand;
 import ru.citycore.city.CityService;
 import ru.citycore.business.BusinessService;
 import ru.citycore.config.CityCoreConfig;
@@ -22,6 +24,7 @@ import ru.citycore.gui.GuiListener;
 import ru.citycore.gui.GuiService;
 import ru.citycore.gui.GuiFeedback;
 import ru.citycore.gui.ChatPromptService;
+import ru.citycore.gui.NavigatorItem;
 import ru.citycore.profile.ProfileListener;
 import ru.citycore.profile.ProfileRepository;
 import ru.citycore.permission.RoleMirror;
@@ -29,6 +32,12 @@ import ru.citycore.permission.RoleMirrors;
 import ru.citycore.industry.IndustryService;
 import ru.citycore.industry.ControllerItems;
 import ru.citycore.industry.ControllerListener;
+import ru.citycore.communication.CommunicationService;
+import ru.citycore.communication.DeviceItems;
+import ru.citycore.communication.DeviceListener;
+import ru.citycore.communication.DeviceRepository;
+import ru.citycore.communication.DeviceService;
+import ru.citycore.communication.LocalChatListener;
 
 import java.io.File;
 import java.io.IOException;
@@ -51,8 +60,8 @@ public final class CityCorePlugin extends JavaPlugin {
             if (!databasePath.startsWith(dataDirectory)) {
                 throw new IllegalArgumentException("database.file должен находиться внутри папки CityCore");
             }
-            Path backup = DatabaseBackup.beforeAlpha18(databasePath, dataDirectory.resolve("backups"));
-            if (backup != null) getLogger().info("Резервная копия перед Alpha 18: " + backup.getFileName());
+            Path backup = DatabaseBackup.beforeAlpha20(databasePath, dataDirectory.resolve("backups"));
+            if (backup != null) getLogger().info("Резервная копия перед Alpha 20: " + backup.getFileName());
             database = new Database(databasePath, config.poolSize());
             Migrations.apply(database);
             storage = new StorageExecutor();
@@ -60,6 +69,11 @@ public final class CityCorePlugin extends JavaPlugin {
             economy = new VaultEconomyGateway(vault, config.currencyScale());
 
             ProfileRepository profiles = new ProfileRepository(database);
+            DeviceRepository deviceRepository = new DeviceRepository(database);
+            DeviceItems deviceItems = new DeviceItems(this);
+            NavigatorItem navigatorItem = new NavigatorItem(this);
+            DeviceService devices = new DeviceService(this, storage, deviceRepository, deviceItems);
+            CommunicationService communication = new CommunicationService(this, storage, deviceRepository, devices);
             InternalLedger ledger = new InternalLedger(database);
             CityService cities = new CityService(database, () -> config.citizenshipReapplyCooldownSeconds());
             BusinessService businesses = new BusinessService(database, type -> switch (type) {
@@ -79,10 +93,13 @@ public final class CityCorePlugin extends JavaPlugin {
             RoleMirror roleMirror = RoleMirrors.create(this);
             ControllerItems controllerItems = new ControllerItems(this);
             GuiService gui = new GuiService(this, economy, storage, cities, businesses, prompts, feedback,
-                    vaultTransfers, emission, roleMirror, industry, controllerItems);
-            getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles, cities, roleMirror), this);
+                    vaultTransfers, emission, roleMirror, industry, controllerItems, communication);
+            getServer().getPluginManager().registerEvents(new ProfileListener(this, storage, profiles, cities, roleMirror, devices, navigatorItem), this);
             getServer().getPluginManager().registerEvents(new GuiListener(gui), this);
             getServer().getPluginManager().registerEvents(prompts, this);
+            getServer().getPluginManager().registerEvents(new LocalChatListener(this, communication), this);
+            getServer().getPluginManager().registerEvents(new DeviceListener(this, devices, communication, gui, navigatorItem), this);
+            getServer().getScheduler().runTaskTimer(this, communication::refreshIndicators, 20L, 40L);
             ControllerListener controllerListener = new ControllerListener(this, storage, industry, controllerItems, gui);
             getServer().getPluginManager().registerEvents(controllerListener, this);
             controllerListener.start();
@@ -97,10 +114,25 @@ public final class CityCorePlugin extends JavaPlugin {
             var registered = getCommand("citycore");
             if (registered == null) throw new IllegalStateException("Команда citycore отсутствует в plugin.yml");
             registered.setExecutor(command); registered.setTabCompleter(command);
-            for (String commandName : new String[]{"citycoreadmin", "citycoremayor", "citycoregovernment"}) {
+            for (String commandName : new String[]{"citycoreadmin", "citycoremayor", "citycoregovernment",
+                    "profile", "city", "business", "documents"}) {
                 var shortcut = getCommand(commandName);
                 if (shortcut == null) throw new IllegalStateException("Команда " + commandName + " отсутствует в plugin.yml");
                 shortcut.setExecutor(command);
+            }
+            PhoneCommand phoneCommand = new PhoneCommand(gui, communication);
+            for (String commandName : new String[]{"phone", "phoneaccept", "phonedecline", "phonehangup"}) {
+                var phone = getCommand(commandName);
+                if (phone == null) throw new IllegalStateException("Команда " + commandName + " отсутствует в plugin.yml");
+                phone.setExecutor(phoneCommand);
+                phone.setTabCompleter(phoneCommand);
+            }
+            RadioCommand radioCommand = new RadioCommand(this, communication);
+            for (String commandName : new String[]{"radio", "radiofrequency", "radiotransmit"}) {
+                var radio = getCommand(commandName);
+                if (radio == null) throw new IllegalStateException("Команда " + commandName + " отсутствует в plugin.yml");
+                radio.setExecutor(radioCommand);
+                radio.setTabCompleter(radioCommand);
             }
 
             if (!getServer().getOnlineMode() && config.warnOfflineMode()) {
@@ -198,12 +230,33 @@ public final class CityCorePlugin extends JavaPlugin {
             // semantic heads to the default visual language; it remains user-toggleable.
             raw.set("gui.custom-heads", true);
         }
-        if (version >= 5) return;
-        raw.set("config-version", 5);
+        if (version < 6) {
+            raw.set("communication.local-chat.enabled", true);
+            raw.set("communication.local-chat.speech-radius", 10.0D);
+            raw.set("communication.local-chat.shout-radius", 20.0D);
+            raw.set("communication.local-chat.shout-prefix", "!");
+            raw.set("communication.phone.enabled", true);
+            raw.set("communication.phone.call-timeout-seconds", 30);
+            raw.set("communication.phone.call-cooldown-seconds", 4);
+            raw.set("communication.radio.enabled", true);
+            raw.set("communication.radio.default-channel", "100.0");
+            raw.set("communication.radio.channels", java.util.List.of(
+                    "100.0", "100.2", "100.4", "100.6", "100.8", "101.0",
+                    "101.2", "101.4", "101.6", "101.8", "102.0", "102.2"));
+            raw.set("communication.devices.issue-starter-phone", true);
+            raw.set("communication.devices.issue-starter-radio", true);
+            raw.set("communication.sounds.volume", 0.18D);
+            raw.set("communication.sounds.ringtone", "BLOCK_NOTE_BLOCK_BELL");
+            raw.set("communication.sounds.call-connected", "BLOCK_AMETHYST_BLOCK_CHIME");
+            raw.set("communication.sounds.call-ended", "BLOCK_NOTE_BLOCK_HAT");
+            raw.set("communication.sounds.radio-transmit", "BLOCK_NOTE_BLOCK_BIT");
+        }
+        if (version >= 6) return;
+        raw.set("config-version", 6);
         try {
             raw.save(file);
         } catch (IOException error) {
-            throw new IllegalStateException("Не удалось обновить config.yml до версии 5", error);
+            throw new IllegalStateException("Не удалось обновить config.yml до версии 6", error);
         }
     }
     public CityCoreConfig config() { return config; }

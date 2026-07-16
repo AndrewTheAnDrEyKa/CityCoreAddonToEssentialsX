@@ -23,6 +23,61 @@ commands:
     aliases: [ccg]
     description: Открыть рабочий раздел государственных структур
     usage: /ccg
+  profile:
+    aliases: [pf]
+    description: Открыть личный профиль CityCore
+    usage: /profile
+    permission: citycore.use
+  city:
+    aliases: [ct]
+    description: Открыть городской раздел CityCore
+    usage: /city
+    permission: citycore.use
+  business:
+    aliases: [bz]
+    description: Открыть предприятия CityCore
+    usage: /business
+    permission: citycore.use
+  documents:
+    aliases: [dc]
+    description: Открыть документы и лицензии CityCore
+    usage: /documents
+    permission: citycore.use
+  phone:
+    aliases: [ph]
+    description: Открыть телефон или позвонить игроку
+    usage: /phone [call <игрок>|accept|decline|hangup|number]
+    permission: citycore.phone
+  phoneaccept:
+    aliases: [pha]
+    description: Принять входящий телефонный звонок
+    usage: /pha
+    permission: citycore.phone
+  phonedecline:
+    aliases: [phd]
+    description: Отклонить входящий телефонный звонок
+    usage: /phd
+    permission: citycore.phone
+  phonehangup:
+    aliases: [phh]
+    description: Завершить телефонный звонок
+    usage: /phh
+    permission: citycore.phone
+  radio:
+    aliases: [ra]
+    description: Включить рацию или открыть её команды
+    usage: /radio [set <канал>|list|status|off|send <текст>]
+    permission: citycore.radio
+  radiofrequency:
+    aliases: [rf, radioset]
+    description: Показать или изменить канал рации
+    usage: /rf [канал]
+    permission: citycore.radio
+  radiotransmit:
+    aliases: [rc]
+    description: Передать одно сообщение в радиоэфир
+    usage: /rc <сообщение>
+    permission: citycore.radio
 permissions:
   citycore.use:
     default: true
@@ -47,3 +102,12 @@ permissions:
     default: op
   citycore.admin.events:
     default: op
+  citycore.communication:
+    default: true
+    children:
+      citycore.phone: true
+      citycore.radio: true
+  citycore.phone:
+    default: true
+  citycore.radio:
+    default: true

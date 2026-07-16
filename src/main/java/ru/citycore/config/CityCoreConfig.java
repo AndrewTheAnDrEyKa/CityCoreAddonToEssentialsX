@@ -5,12 +5,15 @@ import org.bukkit.Sound;
 import org.bukkit.Material;
 import ru.citycore.economy.MinorUnits;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Locale;
 
 public record CityCoreConfig(String databaseFile, int poolSize, int currencyScale,
                              boolean emissionEnabled, long emissionMaxMinor,
                              long citizenshipReapplyCooldownSeconds, IndustrySettings industry,
+                             CommunicationSettings communication,
                              boolean warnOfflineMode, String guiTitle, int guiRows,
                              boolean guiSounds, float soundVolume, boolean soundOpen,
                              boolean soundClick, boolean soundResults,
@@ -32,6 +35,7 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
                 "police", group(config, "police", "citycore_police")
         );
         IndustrySettings industry = industry(config, scale);
+        CommunicationSettings communication = communication(config);
         return new CityCoreConfig(
                 config.getString("database.file", "citycore.db"),
                 Math.max(1, config.getInt("database.pool-size", 4)),
@@ -40,6 +44,7 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
                 emissionMax,
                 Math.max(0L, config.getLong("citizenship.reapply-cooldown-seconds", 86400L)),
                 industry,
+                communication,
                 config.getBoolean("security.warn-offline-mode", true),
                 config.getString("gui.title", "CityCore"),
                 Math.max(1, Math.min(6, config.getInt("gui.rows", 6))),
@@ -56,6 +61,60 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
                 config.getBoolean("gui.custom-heads", true),
                 config.getBoolean("integrations.luckperms.enabled", true),
                 groups
+        );
+    }
+
+    private static CommunicationSettings communication(FileConfiguration config) {
+        double speechRadius = config.getDouble("communication.local-chat.speech-radius", 10.0);
+        double shoutRadius = config.getDouble("communication.local-chat.shout-radius", 20.0);
+        if (!Double.isFinite(speechRadius) || speechRadius <= 0 || speechRadius > 256) {
+            throw new IllegalArgumentException("communication.local-chat.speech-radius должен быть от 0 до 256");
+        }
+        if (!Double.isFinite(shoutRadius) || shoutRadius < speechRadius || shoutRadius > 512) {
+            throw new IllegalArgumentException("communication.local-chat.shout-radius должен быть не меньше радиуса речи и не больше 512");
+        }
+        String prefix = config.getString("communication.local-chat.shout-prefix", "!");
+        if (prefix == null || prefix.isBlank() || prefix.length() > 3) {
+            throw new IllegalArgumentException("communication.local-chat.shout-prefix должен содержать от 1 до 3 символов");
+        }
+
+        List<String> channels = new ArrayList<>();
+        for (String raw : config.getStringList("communication.radio.channels")) {
+            if (raw == null) continue;
+            String normalized = raw.trim();
+            if (!normalized.isBlank() && !channels.contains(normalized)) channels.add(normalized);
+        }
+        if (channels.isEmpty()) {
+            channels.addAll(List.of("100.0", "100.2", "100.4", "100.6", "100.8", "101.0",
+                    "101.2", "101.4", "101.6", "101.8", "102.0", "102.2"));
+        }
+        if (channels.size() > 64) throw new IllegalArgumentException("communication.radio.channels содержит больше 64 каналов");
+        String defaultChannel = config.getString("communication.radio.default-channel", channels.getFirst());
+        if (defaultChannel == null || !channels.contains(defaultChannel.trim())) {
+            throw new IllegalArgumentException("communication.radio.default-channel отсутствует в списке каналов");
+        }
+        double soundVolume = config.getDouble("communication.sounds.volume", 0.18);
+        if (soundVolume < 0 || soundVolume > 1) {
+            throw new IllegalArgumentException("communication.sounds.volume должен быть от 0 до 1");
+        }
+        return new CommunicationSettings(
+                config.getBoolean("communication.local-chat.enabled", true),
+                speechRadius,
+                shoutRadius,
+                prefix,
+                config.getBoolean("communication.phone.enabled", true),
+                Math.max(10, Math.min(120, config.getInt("communication.phone.call-timeout-seconds", 30))),
+                Math.max(1, Math.min(60, config.getInt("communication.phone.call-cooldown-seconds", 4))),
+                config.getBoolean("communication.radio.enabled", true),
+                channels,
+                defaultChannel.trim(),
+                config.getBoolean("communication.devices.issue-starter-phone", true),
+                config.getBoolean("communication.devices.issue-starter-radio", true),
+                (float) soundVolume,
+                sound(config, "communication.sounds.ringtone", "BLOCK_NOTE_BLOCK_BELL"),
+                sound(config, "communication.sounds.call-connected", "BLOCK_AMETHYST_BLOCK_CHIME"),
+                sound(config, "communication.sounds.call-ended", "BLOCK_NOTE_BLOCK_HAT"),
+                sound(config, "communication.sounds.radio-transmit", "BLOCK_NOTE_BLOCK_BIT")
         );
     }
 

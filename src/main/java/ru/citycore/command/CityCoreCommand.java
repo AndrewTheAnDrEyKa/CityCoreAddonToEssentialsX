@@ -33,6 +33,10 @@ public final class CityCoreCommand implements CommandExecutor, TabCompleter {
                 case "citycoreadmin" -> Route.ADMIN;
                 case "citycoremayor" -> Route.MAYOR;
                 case "citycoregovernment" -> Route.GOVERNMENT;
+                case "profile" -> Route.PROFILE;
+                case "city" -> Route.CITY;
+                case "business" -> Route.BUSINESS;
+                case "documents" -> Route.LICENSES;
                 default -> Route.HOME;
             };
             gui.open(player, target);

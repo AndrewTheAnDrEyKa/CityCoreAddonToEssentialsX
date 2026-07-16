@@ -9,27 +9,27 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GuiLayoutTest {
-    @Test void homeHasExactlyThreeCenteredCategorySlots() {
-        assertArrayEquals(new int[]{21, 22, 23}, GuiLayout.homeCategorySlots());
+    @Test void homeHasFiveBalancedApplicationSlots() {
+        assertArrayEquals(new int[]{11, 13, 15, 21, 23}, GuiLayout.homeCategorySlots());
         for (int slot : GuiLayout.homeCategorySlots()) assertFalse(GuiLayout.isFrameSlot(slot));
     }
 
-    @Test void frameNeverConsumesContentOrFooter() {
+    @Test void frameNeverConsumesContent() {
         Set<Integer> frame = Arrays.stream(GuiLayout.frameSlots()).boxed().collect(Collectors.toSet());
         for (int slot : GuiLayout.contentSlots()) assertFalse(frame.contains(slot), "content slot " + slot);
-        assertFalse(frame.contains(GuiLayout.BACK_SLOT));
-        assertFalse(frame.contains(GuiLayout.HOME_SLOT));
-        assertFalse(frame.contains(GuiLayout.CLOSE_SLOT));
-        assertEquals(17, frame.size());
+        assertTrue(frame.contains(GuiLayout.BACK_SLOT));
+        assertTrue(frame.contains(GuiLayout.HOME_SLOT));
+        assertTrue(frame.contains(GuiLayout.CLOSE_SLOT));
+        assertEquals(18, frame.size());
     }
 
-    @Test void frameIsTopBarAndFourSidePairs() {
+    @Test void frameIsTopAndFooterWithoutSideClutter() {
         for (int slot = 0; slot <= 8; slot++) assertTrue(GuiLayout.isFrameSlot(slot));
         for (int row = 1; row <= 4; row++) {
-            assertTrue(GuiLayout.isFrameSlot(row * 9));
-            assertTrue(GuiLayout.isFrameSlot(row * 9 + 8));
+            assertFalse(GuiLayout.isFrameSlot(row * 9));
+            assertFalse(GuiLayout.isFrameSlot(row * 9 + 8));
         }
-        for (int slot = 45; slot <= 53; slot++) assertFalse(GuiLayout.isFrameSlot(slot));
+        for (int slot = 45; slot <= 53; slot++) assertTrue(GuiLayout.isFrameSlot(slot));
     }
 
     @Test void rowsAreCenteredAndContiguous() {

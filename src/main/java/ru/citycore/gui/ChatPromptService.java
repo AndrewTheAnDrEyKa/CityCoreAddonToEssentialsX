@@ -19,20 +19,29 @@ import java.util.function.Function;
 public final class ChatPromptService implements Listener {
     private final CityCorePlugin plugin;
     private final GuiFeedback feedback;
-    private final Map<UUID, Consumer<String>> prompts = new ConcurrentHashMap<>();
+    private final Map<UUID, Prompt> prompts = new ConcurrentHashMap<>();
     public ChatPromptService(CityCorePlugin plugin, GuiFeedback feedback) {
         this.plugin = plugin;
         this.feedback = feedback;
     }
 
     public void begin(Player player, String question, Consumer<String> answer) {
-        prompts.put(player.getUniqueId(), answer);
+        UUID token = UUID.randomUUID();
+        prompts.put(player.getUniqueId(), new Prompt(token, answer));
         player.closeInventory();
         feedback.prompt(player);
         player.sendMessage(Component.empty());
-        player.sendMessage(UiText.plain("╭  CityCore · ввод данных", NamedTextColor.GOLD));
+        player.sendMessage(UiText.plain("╭  CityCore  •  ввод данных", NamedTextColor.GOLD));
+        player.sendMessage(UiText.plain("│", NamedTextColor.DARK_GRAY));
         player.sendMessage(UiText.plain("│  " + question, NamedTextColor.YELLOW));
-        player.sendMessage(UiText.plain("╰  Ответьте в чат. Для выхода: отмена", NamedTextColor.DARK_GRAY));
+        player.sendMessage(UiText.plain("│", NamedTextColor.DARK_GRAY));
+        player.sendMessage(UiText.plain("╰  Ответьте в чат  •  отмена: «отмена»  •  срок: 2 мин", NamedTextColor.DARK_GRAY));
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            Prompt current = prompts.get(player.getUniqueId());
+            if (current != null && current.token().equals(token) && prompts.remove(player.getUniqueId(), current)) {
+                if (player.isOnline()) UiText.info(player, "Ввод отменён: время ожидания истекло.");
+            }
+        }, 20L * 120L);
     }
 
     public <T> void beginValidated(Player player, String question, Function<String, T> parser,
@@ -50,17 +59,19 @@ public final class ChatPromptService implements Listener {
     }
 
     @EventHandler public void onChat(AsyncChatEvent event) {
-        Consumer<String> answer = prompts.remove(event.getPlayer().getUniqueId());
-        if (answer == null) return;
+        Prompt prompt = prompts.remove(event.getPlayer().getUniqueId());
+        if (prompt == null) return;
         event.setCancelled(true);
         String value = PlainTextComponentSerializer.plainText().serialize(event.message()).trim();
         plugin.getServer().getScheduler().runTask(plugin, () -> {
             if (value.equalsIgnoreCase("отмена") || value.equalsIgnoreCase("cancel")) {
                 UiText.info(event.getPlayer(), "Ввод отменён."); return;
             }
-            answer.accept(value);
+            prompt.answer().accept(value);
         });
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) { prompts.remove(event.getPlayer().getUniqueId()); }
+
+    private record Prompt(UUID token, Consumer<String> answer) {}
 }

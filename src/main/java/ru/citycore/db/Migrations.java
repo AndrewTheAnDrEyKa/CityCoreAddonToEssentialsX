@@ -69,6 +69,14 @@ public final class Migrations {
             "CREATE TABLE IF NOT EXISTS industrial_cycle(id TEXT PRIMARY KEY,object_id TEXT NOT NULL,period_key TEXT NOT NULL UNIQUE,due_at TEXT NOT NULL,state TEXT NOT NULL,extracted_units INTEGER NOT NULL DEFAULT 0,gross_minor INTEGER NOT NULL DEFAULT 0,maintenance_minor INTEGER NOT NULL DEFAULT 0,lease_minor INTEGER NOT NULL DEFAULT 0,tax_minor INTEGER NOT NULL DEFAULT 0,net_minor INTEGER NOT NULL DEFAULT 0,debt_added_minor INTEGER NOT NULL DEFAULT 0,details TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(object_id) REFERENCES industrial_object(id))",
             "CREATE INDEX IF NOT EXISTS idx_industrial_cycle_object ON industrial_cycle(object_id,due_at)",
             "CREATE TABLE IF NOT EXISTS city_industry_policy(city_id TEXT PRIMARY KEY,procurement_account_id TEXT NOT NULL,tax_bps INTEGER NOT NULL CHECK(tax_bps>=0),updated_at TEXT NOT NULL,updated_by TEXT,FOREIGN KEY(city_id) REFERENCES city(id),FOREIGN KEY(procurement_account_id) REFERENCES account(id))"
+    ), List.of(
+            "CREATE TABLE IF NOT EXISTS device(serial TEXT PRIMARY KEY,owner_uuid TEXT NOT NULL,device_type TEXT NOT NULL,model TEXT NOT NULL,phone_number TEXT,state TEXT NOT NULL,last_channel TEXT,issued_at TEXT NOT NULL,updated_at TEXT NOT NULL,FOREIGN KEY(owner_uuid) REFERENCES player_profile(uuid))",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_active_owner_type ON device(owner_uuid,device_type) WHERE state='ACTIVE'",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_device_phone_number ON device(phone_number) WHERE phone_number IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_device_owner_state ON device(owner_uuid,state,device_type)",
+            "CREATE TABLE IF NOT EXISTS communication_event(id TEXT PRIMARY KEY,event_type TEXT NOT NULL,actor_uuid TEXT NOT NULL,peer_uuid TEXT,device_serial TEXT,channel TEXT,details TEXT NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(actor_uuid) REFERENCES player_profile(uuid))",
+            "CREATE INDEX IF NOT EXISTS idx_communication_actor_created ON communication_event(actor_uuid,created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_communication_peer_created ON communication_event(peer_uuid,created_at)"
     ));
 
     private Migrations() {}
