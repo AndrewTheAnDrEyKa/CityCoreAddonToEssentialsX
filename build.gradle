@@ -1,0 +1,76 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+group = 'ru.citycore'
+version = '0.1.0-alpha.18.0'
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+    maven { url = 'https://jitpack.io' }
+}
+
+dependencies {
+    compileOnly 'io.papermc.paper:paper-api:1.21.8-R0.1-SNAPSHOT'
+    compileOnly 'com.github.MilkBowl:VaultAPI:1.7.1'
+    compileOnly 'net.luckperms:api:5.4'
+    implementation 'org.xerial:sqlite-jdbc:3.50.3.0'
+    implementation 'com.zaxxer:HikariCP:6.3.0'
+    testImplementation platform('org.junit:junit-bom:5.13.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'io.papermc.paper:paper-api:1.21.8-R0.1-SNAPSHOT'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+processResources {
+    filesMatching('plugin.yml') { expand(version: project.version) }
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'failed', 'skipped'
+        exceptionFormat 'full'
+        showCauses true
+        showExceptions true
+        showStackTraces true
+    }
+    reports {
+        junitXml.required = true
+        html.required = true
+    }
+}
+
+shadowJar {
+    archiveClassifier = ''
+    relocate 'com.zaxxer.hikari', 'ru.citycore.lib.hikari'
+}
+
+tasks.build.dependsOn tasks.shadowJar
+
+tasks.register('verifyOptionalIntegrations') {
+    dependsOn tasks.shadowJar
+    doLast {
+        def jarFile = tasks.shadowJar.archiveFile.get().asFile
+        def roleMirrors = zipTree(jarFile).matching {
+            include 'ru/citycore/permission/RoleMirrors.class'
+        }.singleFile.bytes
+        def bytecode = new String(roleMirrors, java.nio.charset.StandardCharsets.ISO_8859_1)
+        if (bytecode.contains('net/luckperms/')) {
+            throw new GradleException('RoleMirrors must not link directly to LuckPerms API classes')
+        }
+    }
+}
+
+tasks.check.dependsOn tasks.verifyOptionalIntegrations

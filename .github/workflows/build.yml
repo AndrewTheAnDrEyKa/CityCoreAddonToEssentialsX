@@ -1,0 +1,44 @@
+name: Build CityCore
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Gradle 8.14.3
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+      - name: Test and build
+        run: gradle --no-daemon clean build
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityCore-test-report
+          path: |
+            build/test-results/test/
+            build/reports/tests/test/
+          if-no-files-found: warn
+      - name: Upload plugin JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: CityCore-0.1.0-alpha.18.0
+          path: build/libs/CityCore-0.1.0-alpha.18.0.jar
+          if-no-files-found: error
