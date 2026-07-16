@@ -193,12 +193,17 @@ public final class CityCorePlugin extends JavaPlugin {
             raw.set("industry.levels.3.maintenance", "360.00");
             raw.set("industry.levels.3.minimum-license-days", 90);
         }
-        if (version >= 4) return;
-        raw.set("config-version", 4);
+        if (version < 5) {
+            // Alpha 18 shipped this experimental option disabled. Alpha 19 promotes
+            // semantic heads to the default visual language; it remains user-toggleable.
+            raw.set("gui.custom-heads", true);
+        }
+        if (version >= 5) return;
+        raw.set("config-version", 5);
         try {
             raw.save(file);
         } catch (IOException error) {
-            throw new IllegalStateException("Не удалось обновить config.yml до версии 4", error);
+            throw new IllegalStateException("Не удалось обновить config.yml до версии 5", error);
         }
     }
     public CityCoreConfig config() { return config; }

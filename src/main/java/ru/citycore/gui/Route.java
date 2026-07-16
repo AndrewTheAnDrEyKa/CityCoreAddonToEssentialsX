@@ -13,7 +13,6 @@ public enum Route {
     BUSINESS_PENDING,
     LICENSES,
     ECONOMY,
-    HELP,
     MAYOR,
     GOVERNMENT,
     ADMIN,

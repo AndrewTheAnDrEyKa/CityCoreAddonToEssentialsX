@@ -9,8 +9,8 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class GuiLayoutTest {
-    @Test void homeHasExactlyFourAdjacentCategorySlots() {
-        assertArrayEquals(new int[]{20, 21, 22, 23}, GuiLayout.homeCategorySlots());
+    @Test void homeHasExactlyThreeCenteredCategorySlots() {
+        assertArrayEquals(new int[]{21, 22, 23}, GuiLayout.homeCategorySlots());
         for (int slot : GuiLayout.homeCategorySlots()) assertFalse(GuiLayout.isFrameSlot(slot));
     }
 
@@ -32,11 +32,12 @@ class GuiLayoutTest {
         for (int slot = 45; slot <= 53; slot++) assertFalse(GuiLayout.isFrameSlot(slot));
     }
 
-    @Test void authoritySectionsAreLeftToRightAndContiguous() {
-        assertArrayEquals(new int[0], GuiLayout.authoritySlots(0));
-        assertArrayEquals(new int[]{47}, GuiLayout.authoritySlots(1));
-        assertArrayEquals(new int[]{47, 48}, GuiLayout.authoritySlots(2));
-        assertArrayEquals(new int[]{47, 48, 49}, GuiLayout.authoritySlots(3));
-        assertArrayEquals(new int[]{47, 48, 49, 50, 51}, GuiLayout.authoritySlots(8));
+    @Test void rowsAreCenteredAndContiguous() {
+        assertArrayEquals(new int[0], GuiLayout.centeredRow(2, 0));
+        assertArrayEquals(new int[]{22}, GuiLayout.centeredRow(2, 1));
+        assertArrayEquals(new int[]{21, 22, 23}, GuiLayout.centeredRow(2, 3));
+        assertArrayEquals(new int[]{19, 20, 21, 22, 23, 24, 25}, GuiLayout.centeredRow(2, 7));
+        assertThrows(IllegalArgumentException.class, () -> GuiLayout.centeredRow(0, 3));
+        assertThrows(IllegalArgumentException.class, () -> GuiLayout.centeredRow(5, 3));
     }
 }

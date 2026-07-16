@@ -1,4 +1,4 @@
-config-version: 4
+config-version: 5
 database:
   file: citycore.db
   pool-size: 4
@@ -48,7 +48,8 @@ gui:
   sound-success-effect: "ENTITY_EXPERIENCE_ORB_PICKUP"
   sound-failure-effect: "BLOCK_NOTE_BLOCK_BASS"
   sound-prompt-effect: "BLOCK_NOTE_BLOCK_HAT"
-  custom-heads: false
+  # Цветные смысловые головы без обязательного ресурспака.
+  custom-heads: true
 integrations:
   luckperms:
     enabled: true

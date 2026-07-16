@@ -53,7 +53,7 @@ public record CityCoreConfig(String databaseFile, int poolSize, int currencyScal
                 sound(config, "gui.sound-success-effect", "ENTITY_EXPERIENCE_ORB_PICKUP"),
                 sound(config, "gui.sound-failure-effect", "BLOCK_NOTE_BLOCK_BASS"),
                 sound(config, "gui.sound-prompt-effect", "BLOCK_NOTE_BLOCK_HAT"),
-                config.getBoolean("gui.custom-heads", false),
+                config.getBoolean("gui.custom-heads", true),
                 config.getBoolean("integrations.luckperms.enabled", true),
                 groups
         );

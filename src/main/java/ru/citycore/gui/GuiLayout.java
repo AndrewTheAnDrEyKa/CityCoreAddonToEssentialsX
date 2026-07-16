@@ -6,10 +6,10 @@ import java.util.List;
 /** Stable geometry shared by every CityCore inventory screen. */
 public final class GuiLayout {
     public static final int SIZE = 54;
-    public static final int BACK_SLOT = 45;
-    public static final int HOME_SLOT = 46;
-    public static final int CLOSE_SLOT = 53;
-    private static final int[] HOME_CATEGORY_SLOTS = {20, 21, 22, 23};
+    public static final int BACK_SLOT = 48;
+    public static final int HOME_SLOT = 49;
+    public static final int CLOSE_SLOT = 50;
+    private static final int[] HOME_CATEGORY_SLOTS = {21, 22, 23};
 
     private static final int[] CONTENT_SLOTS = {
             10, 11, 12, 13, 14, 15, 16,
@@ -36,10 +36,13 @@ public final class GuiLayout {
         return slots.stream().mapToInt(Integer::intValue).toArray();
     }
 
-    public static int[] authoritySlots(int count) {
-        int safe = Math.max(0, Math.min(5, count));
+    /** Returns a contiguous row centered inside the seven-column content area. */
+    public static int[] centeredRow(int row, int count) {
+        if (row < 1 || row > 4) throw new IllegalArgumentException("content row must be 1..4");
+        int safe = Math.max(0, Math.min(7, count));
         int[] result = new int[safe];
-        for (int i = 0; i < safe; i++) result[i] = 47 + i;
+        int firstColumn = 1 + (7 - safe) / 2;
+        for (int i = 0; i < safe; i++) result[i] = row * 9 + firstColumn + i;
         return result;
     }
 }
