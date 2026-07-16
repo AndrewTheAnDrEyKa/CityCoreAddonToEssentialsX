@@ -33,6 +33,7 @@ permissions:
       citycore.admin.reload: true
       citycore.admin.cities: true
       citycore.admin.emission: true
+      citycore.admin.industry: true
       citycore.admin.events: true
   citycore.admin.status:
     default: op
@@ -41,6 +42,8 @@ permissions:
   citycore.admin.cities:
     default: op
   citycore.admin.emission:
+    default: op
+  citycore.admin.industry:
     default: op
   citycore.admin.events:
     default: op

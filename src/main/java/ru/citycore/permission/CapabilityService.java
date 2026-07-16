@@ -13,6 +13,9 @@ public final class CapabilityService {
             case ADMIN_WORKSPACE -> player.hasPermission("citycore.admin");
             case REVIEW_CITY_FOUNDATIONS -> player.hasPermission("citycore.admin.cities");
             case ISSUE_CURRENCY -> player.hasPermission("citycore.admin.emission");
+            case MANAGE_INDUSTRY -> city != null
+                    && (city.role() == CityRole.MAYOR || city.role() == CityRole.OFFICIAL);
+            case ADMIN_INDUSTRY -> player.hasPermission("citycore.admin.industry");
             case MANAGE_EVENTS -> player.hasPermission("citycore.admin.events");
         };
     }

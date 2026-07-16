@@ -5,6 +5,7 @@ import ru.citycore.db.Database;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.ResultSet;
+import java.sql.Connection;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.UUID;
@@ -14,18 +15,20 @@ public final class InternalLedger {
     public InternalLedger(Database database) { this.database = database; }
 
     public String ensureAccount(String ownerType, String ownerId, String currency) {
-        return database.transaction(connection -> {
-            try (var find = connection.prepareStatement("SELECT id FROM account WHERE owner_type=? AND owner_id=? AND currency=?")) {
-                find.setString(1, ownerType); find.setString(2, ownerId); find.setString(3, currency);
-                try (ResultSet rs = find.executeQuery()) { if (rs.next()) return rs.getString(1); }
-            }
-            String id = UUID.randomUUID().toString();
-            try (var insert = connection.prepareStatement("INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,?,?,?,0,0)")) {
-                insert.setString(1, id); insert.setString(2, ownerType); insert.setString(3, ownerId); insert.setString(4, currency);
-                insert.executeUpdate();
-            }
-            return id;
-        });
+        return database.transaction(connection -> ensureAccount(connection, ownerType, ownerId, currency));
+    }
+
+    public String ensureAccount(Connection connection, String ownerType, String ownerId, String currency) throws Exception {
+        try (var find = connection.prepareStatement("SELECT id FROM account WHERE owner_type=? AND owner_id=? AND currency=?")) {
+            find.setString(1, ownerType); find.setString(2, ownerId); find.setString(3, currency);
+            try (ResultSet rs = find.executeQuery()) { if (rs.next()) return rs.getString(1); }
+        }
+        String id = UUID.randomUUID().toString();
+        try (var insert = connection.prepareStatement("INSERT INTO account(id,owner_type,owner_id,currency,balance_minor,version) VALUES(?,?,?,?,0,0)")) {
+            insert.setString(1, id); insert.setString(2, ownerType); insert.setString(3, ownerId); insert.setString(4, currency);
+            insert.executeUpdate();
+        }
+        return id;
     }
 
     public LedgerResult transfer(String idempotencyKey, String debitAccount, String creditAccount,
@@ -34,7 +37,16 @@ public final class InternalLedger {
         if (debitAccount.equals(creditAccount)) throw new IllegalArgumentException("Счета должны различаться");
         if (amountMinor <= 0) throw new IllegalArgumentException("Сумма должна быть положительной");
         if (reason == null || reason.isBlank()) throw new IllegalArgumentException("Причина операции обязательна");
-        return database.transaction(connection -> {
+        return database.transaction(connection -> transfer(connection, idempotencyKey, debitAccount, creditAccount,
+                amountMinor, reason, actor));
+    }
+
+    public LedgerResult transfer(Connection connection, String idempotencyKey, String debitAccount,
+                                 String creditAccount, long amountMinor, String reason, UUID actor) throws Exception {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) throw new IllegalArgumentException("idempotencyKey обязателен");
+        if (debitAccount.equals(creditAccount)) throw new IllegalArgumentException("Счета должны различаться");
+        if (amountMinor <= 0) throw new IllegalArgumentException("Сумма должна быть положительной");
+        if (reason == null || reason.isBlank()) throw new IllegalArgumentException("Причина операции обязательна");
             try (var existing = connection.prepareStatement("SELECT id FROM ledger_entry WHERE idempotency_key=?")) {
                 existing.setString(1, idempotencyKey);
                 try (ResultSet rs = existing.executeQuery()) { if (rs.next()) return new LedgerResult(rs.getString(1), true); }
@@ -67,7 +79,16 @@ public final class InternalLedger {
                 insert.setString(9, previousHash); insert.setString(10, hash); insert.executeUpdate();
             }
             return new LedgerResult(id, false);
-        });
+    }
+
+    public long balance(Connection connection, String accountId) throws Exception {
+        try (var query = connection.prepareStatement("SELECT balance_minor FROM account WHERE id=?")) {
+            query.setString(1, accountId);
+            try (ResultSet rs = query.executeQuery()) {
+                if (!rs.next()) throw new IllegalArgumentException("Счёт не найден");
+                return rs.getLong(1);
+            }
+        }
     }
 
     private void ensureExists(java.sql.Connection connection, String id) throws Exception {

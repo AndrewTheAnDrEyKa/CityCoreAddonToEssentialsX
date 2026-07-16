@@ -9,6 +9,7 @@ public final class GuiLayout {
     public static final int BACK_SLOT = 45;
     public static final int HOME_SLOT = 46;
     public static final int CLOSE_SLOT = 53;
+    private static final int[] HOME_CATEGORY_SLOTS = {20, 21, 22, 23};
 
     private static final int[] CONTENT_SLOTS = {
             10, 11, 12, 13, 14, 15, 16,
@@ -20,6 +21,7 @@ public final class GuiLayout {
     private GuiLayout() {}
 
     public static int[] contentSlots() { return CONTENT_SLOTS.clone(); }
+    public static int[] homeCategorySlots() { return HOME_CATEGORY_SLOTS.clone(); }
 
     public static boolean isFrameSlot(int slot) {
         if (slot < 0 || slot >= SIZE) return false;
@@ -35,11 +37,9 @@ public final class GuiLayout {
     }
 
     public static int[] authoritySlots(int count) {
-        return switch (count) {
-            case 0 -> new int[0];
-            case 1 -> new int[]{49};
-            case 2 -> new int[]{48, 49};
-            default -> new int[]{48, 49, 50};
-        };
+        int safe = Math.max(0, Math.min(5, count));
+        int[] result = new int[safe];
+        for (int i = 0; i < safe; i++) result[i] = 47 + i;
+        return result;
     }
 }

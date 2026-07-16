@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 public final class ChatPromptService implements Listener {
     private final CityCorePlugin plugin;
@@ -32,6 +33,20 @@ public final class ChatPromptService implements Listener {
         player.sendMessage(UiText.plain("╭  CityCore · ввод данных", NamedTextColor.GOLD));
         player.sendMessage(UiText.plain("│  " + question, NamedTextColor.YELLOW));
         player.sendMessage(UiText.plain("╰  Ответьте в чат. Для выхода: отмена", NamedTextColor.DARK_GRAY));
+    }
+
+    public <T> void beginValidated(Player player, String question, Function<String, T> parser,
+                                   Consumer<T> answer) {
+        begin(player, question, value -> {
+            try {
+                answer.accept(parser.apply(value));
+            } catch (RuntimeException invalid) {
+                feedback.failure(player);
+                String message = invalid.getMessage() == null ? "Проверьте введённое значение." : invalid.getMessage();
+                UiText.error(player, message);
+                beginValidated(player, question, parser, answer);
+            }
+        });
     }
 
     @EventHandler public void onChat(AsyncChatEvent event) {

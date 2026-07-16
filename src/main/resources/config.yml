@@ -1,4 +1,4 @@
-config-version: 3
+config-version: 4
 database:
   file: citycore.db
   pool-size: 4
@@ -6,6 +6,33 @@ economy:
   currency-scale: 2
   emission-enabled: true
   emission-max-amount: "1000000.00"
+citizenship:
+  reapply-cooldown-seconds: 86400
+industry:
+  enabled: true
+  cycle-seconds: 3600
+  max-catch-up-periods: 3
+  default-lease: "20.00"
+  debt-suspend-threshold: "1000.00"
+  default-tax-bps: 500
+  max-tax-bps: 2500
+  controller-material: "LODESTONE"
+  levels:
+    1:
+      units-per-cycle: 10
+      price-per-unit: "25.00"
+      maintenance: "40.00"
+      minimum-license-days: 7
+    2:
+      units-per-cycle: 25
+      price-per-unit: "25.00"
+      maintenance: "120.00"
+      minimum-license-days: 30
+    3:
+      units-per-cycle: 60
+      price-per-unit: "25.00"
+      maintenance: "360.00"
+      minimum-license-days: 90
 security:
   warn-offline-mode: true
 gui:
