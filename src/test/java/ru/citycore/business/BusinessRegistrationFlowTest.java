@@ -66,6 +66,10 @@ class BusinessRegistrationFlowTest {
         assertEquals(2, detail.requestedIndustryLevel());
         assertEquals(note, detail.applicationNote());
         assertEquals("PENDING", detail.status());
+        assertFalse(detail.canOpenOilIndustry(), "до одобрения нефтяной раздел закрыт");
+        setup.businesses().decide(setup.official(), business.id(), true);
+        assertTrue(setup.businesses().detail(setup.citizen(), business.id()).canOpenOilIndustry(),
+                "одобренное новое нефтяное предприятие должно открывать отраслевой раздел");
         assertThrows(IllegalArgumentException.class, () -> setup.businesses().register(setup.citizen(),
                 "bad_oil", "Неполная заявка", BusinessActivity.OIL_EXTRACTION.name(), null, "коротко"));
     }

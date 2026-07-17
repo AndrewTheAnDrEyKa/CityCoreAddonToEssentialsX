@@ -641,8 +641,7 @@ public final class GuiService {
                         actions.add(button(GuiIcon.CANCEL, "Отозвать регистрацию",
                                 "business_withdraw:" + business.id(), "Закрыть ожидающее заявление"));
                     }
-                    if (business.owner() && "ACTIVE".equals(business.status())
-                            && "OIL_EXTRACTION".equals(business.activityType())) {
+                    if (business.canOpenOilIndustry()) {
                         actions.add(button(GuiIcon.INDUSTRY, "Нефтяные объекты",
                                 "industry_business:" + business.id(),
                                 data.objects().isEmpty() ? "Получить и установить первый контроллер"

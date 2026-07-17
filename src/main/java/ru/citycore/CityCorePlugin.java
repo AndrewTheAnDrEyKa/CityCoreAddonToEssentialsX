@@ -60,8 +60,8 @@ public final class CityCorePlugin extends JavaPlugin {
             if (!databasePath.startsWith(dataDirectory)) {
                 throw new IllegalArgumentException("database.file должен находиться внутри папки CityCore");
             }
-            Path backup = DatabaseBackup.beforeAlpha212(databasePath, dataDirectory.resolve("backups"));
-            if (backup != null) getLogger().info("Резервная копия перед Alpha 21.2: " + backup.getFileName());
+            Path backup = DatabaseBackup.beforeAlpha213(databasePath, dataDirectory.resolve("backups"));
+            if (backup != null) getLogger().info("Резервная копия перед Alpha 21.3: " + backup.getFileName());
             database = new Database(databasePath, config.poolSize());
             Migrations.apply(database);
             storage = new StorageExecutor();
@@ -82,6 +82,12 @@ public final class CityCorePlugin extends JavaPlugin {
                 case "OIL_EXTRACTION_III" -> config.industry().level(3).minimumLicenseDays();
                 default -> 1;
             });
+            BusinessService.OilDataHealth oilDataHealth = businesses.oilDataHealth();
+            String oilHealthMessage = "Проверка нефтяных данных: предприятий=" + oilDataHealth.oilBusinesses()
+                    + ", нераспознанных анкет=" + oilDataHealth.unresolvedOilQuestionnaires()
+                    + ", активных несовместимых TRADE=" + oilDataHealth.incompatibleActiveTradeLicenses();
+            if (oilDataHealth.healthy()) getLogger().info(oilHealthMessage);
+            else getLogger().warning(oilHealthMessage);
             IndustryService industry = new IndustryService(database, ledger, () -> config.industry());
             EmissionService emission = new EmissionService(database, ledger, () -> config.emissionMaxMinor());
             int recoveredIssues = emission.recoverIncomplete();

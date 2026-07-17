@@ -86,6 +86,35 @@ public final class Migrations {
             "ALTER TABLE resource_deposit ADD COLUMN source_type TEXT NOT NULL DEFAULT 'LEGACY'",
             "CREATE INDEX IF NOT EXISTS idx_resource_deposit_world_position ON resource_deposit(world_uuid,x,z,status)",
             "CREATE INDEX IF NOT EXISTS idx_business_owner_status ON business(owner_uuid,status,created_at)"
+    ), List.of(
+            // Alpha 21.1 could leave an oil application classified as another activity.
+            // Only unambiguous oil evidence is repaired: the oil questionnaire, an
+            // industrial object, or a previously issued oil-level licence.
+            """
+            UPDATE business
+            SET activity_type='OIL_EXTRACTION', review_required=1
+            WHERE activity_type<>'OIL_EXTRACTION'
+              AND (
+                    (requested_industry_level BETWEEN 1 AND 3
+                     AND length(trim(application_note)) BETWEEN 15 AND 180)
+                 OR EXISTS(SELECT 1 FROM industrial_object io WHERE io.business_id=business.id)
+                 OR EXISTS(SELECT 1 FROM license l
+                           WHERE l.business_id=business.id
+                             AND l.license_type IN ('OIL_EXTRACTION_I','OIL_EXTRACTION_II','OIL_EXTRACTION_III'))
+              )
+            """,
+            // Preserve the erroneous licence row for audit/history, but make it
+            // inactive. Trading permission is never valid for an oil enterprise.
+            """
+            UPDATE license
+            SET status='REVOKED',
+                revoked_at=COALESCE(revoked_at,issued_at),
+                revoked_by=COALESCE(revoked_by,issued_by)
+            WHERE license_type='TRADE'
+              AND status='ACTIVE'
+              AND business_id IN (SELECT id FROM business WHERE activity_type='OIL_EXTRACTION')
+            """,
+            "CREATE INDEX IF NOT EXISTS idx_business_activity_status ON business(activity_type,status,created_at)"
     ));
 
     private Migrations() {}

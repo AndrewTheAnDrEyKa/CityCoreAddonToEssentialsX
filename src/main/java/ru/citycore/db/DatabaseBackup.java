@@ -25,6 +25,10 @@ public final class DatabaseBackup {
         return beforeVersion(databaseFile, backupDirectory, "alpha21.2");
     }
 
+    public static Path beforeAlpha213(Path databaseFile, Path backupDirectory) {
+        return beforeVersion(databaseFile, backupDirectory, "alpha21.3");
+    }
+
     private static Path beforeVersion(Path databaseFile, Path backupDirectory, String version) {
         if (!Files.isRegularFile(databaseFile)) return null;
         try {

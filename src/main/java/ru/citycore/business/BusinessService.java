@@ -223,6 +223,39 @@ public final class BusinessService {
         });
     }
 
+    public OilDataHealth oilDataHealth() {
+        return database.transaction(connection -> {
+            int oilBusinesses;
+            int unresolvedOilQuestionnaires;
+            int incompatibleActiveTradeLicenses;
+            try (var query = connection.createStatement();
+                 var rs = query.executeQuery("""
+                         SELECT
+                           SUM(CASE WHEN activity_type='OIL_EXTRACTION' THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN activity_type<>'OIL_EXTRACTION'
+                                     AND requested_industry_level BETWEEN 1 AND 3
+                                     AND length(trim(application_note)) BETWEEN 15 AND 180
+                                    THEN 1 ELSE 0 END)
+                         FROM business
+                         """)) {
+                rs.next();
+                oilBusinesses = rs.getInt(1);
+                unresolvedOilQuestionnaires = rs.getInt(2);
+            }
+            try (var query = connection.createStatement();
+                 var rs = query.executeQuery("""
+                         SELECT COUNT(*) FROM license l JOIN business b ON b.id=l.business_id
+                         WHERE b.activity_type='OIL_EXTRACTION'
+                           AND l.license_type='TRADE' AND l.status='ACTIVE'
+                         """)) {
+                rs.next();
+                incompatibleActiveTradeLicenses = rs.getInt(1);
+            }
+            return new OilDataHealth(oilBusinesses, unresolvedOilQuestionnaires,
+                    incompatibleActiveTradeLicenses);
+        });
+    }
+
     public int pendingReviewCount(UUID actor) {
         return database.transaction(connection -> {
             Authority authority = authority(connection, actor);
@@ -295,7 +328,10 @@ public final class BusinessService {
             String sql = """
                     SELECT l.id,l.business_id,l.license_type,l.status,l.issued_at,l.expires_at,b.name
                     FROM license l JOIN business b ON b.id=l.business_id
-                    WHERE 
+                    WHERE ((b.activity_type='TRADE' AND l.license_type='TRADE')
+                        OR (b.activity_type='OIL_EXTRACTION'
+                            AND l.license_type IN ('OIL_EXTRACTION_I','OIL_EXTRACTION_II','OIL_EXTRACTION_III')))
+                      AND 
                     """ + (official ? "b.city_id=?" : "b.owner_uuid=?") + " ORDER BY l.expires_at,l.license_type";
             List<LicenseCard> result = new ArrayList<>();
             try (var query = connection.prepareStatement(sql)) {
@@ -329,7 +365,15 @@ public final class BusinessService {
 
     private List<LicenseView> readLicenses(java.sql.Connection connection, String businessId) throws Exception {
         List<LicenseView> result = new ArrayList<>();
-        try (var query = connection.prepareStatement("SELECT id,license_type,status,issued_at,expires_at FROM license WHERE business_id=? ORDER BY license_type")) {
+        try (var query = connection.prepareStatement("""
+                SELECT l.id,l.license_type,l.status,l.issued_at,l.expires_at
+                FROM license l JOIN business b ON b.id=l.business_id
+                WHERE l.business_id=?
+                  AND ((b.activity_type='TRADE' AND l.license_type='TRADE')
+                    OR (b.activity_type='OIL_EXTRACTION'
+                        AND l.license_type IN ('OIL_EXTRACTION_I','OIL_EXTRACTION_II','OIL_EXTRACTION_III')))
+                ORDER BY l.license_type
+                """)) {
             query.setString(1, businessId);
             try (var rs = query.executeQuery()) {
                 while (rs.next()) result.add(new LicenseView(rs.getString("id"), businessId,
@@ -418,7 +462,17 @@ public final class BusinessService {
     public record BusinessDetail(String id, String cityId, UUID ownerId, String ownerName, String slug,
                                  String name, String status, String activityType, String accountId, Long balanceMinor,
                                  boolean owner, boolean official, Integer requestedIndustryLevel,
-                                 String applicationNote, boolean reviewRequired, List<LicenseView> licenses) {}
+                                 String applicationNote, boolean reviewRequired, List<LicenseView> licenses) {
+        public boolean canOpenOilIndustry() {
+            return owner && "ACTIVE".equals(status) && BusinessActivity.OIL_EXTRACTION.name().equals(activityType);
+        }
+    }
     public record LicenseCard(String id, String businessId, String businessName, String type, String status,
                               Instant issuedAt, Instant expiresAt) {}
+    public record OilDataHealth(int oilBusinesses, int unresolvedOilQuestionnaires,
+                                int incompatibleActiveTradeLicenses) {
+        public boolean healthy() {
+            return unresolvedOilQuestionnaires == 0 && incompatibleActiveTradeLicenses == 0;
+        }
+    }
 }
